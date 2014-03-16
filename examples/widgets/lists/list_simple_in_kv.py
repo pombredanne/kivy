@@ -9,7 +9,7 @@ Builder.load_string("""
     size: 400,400
     ListView:
         size_hint: .8,.8
-        item_strings: [str(index) for index in xrange(100)]
+        item_strings: [str(index) for index in range(100)]
 """)
 
 
@@ -24,7 +24,6 @@ class MainView(GridLayout):
 
     def __init__(self, **kwargs):
         kwargs['cols'] = 1
-        kwargs['size_hint'] = (1.0, 1.0)
         super(MainView, self).__init__(**kwargs)
 
         listview_modal = ListViewModal()

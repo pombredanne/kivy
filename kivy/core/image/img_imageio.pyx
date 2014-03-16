@@ -120,40 +120,72 @@ cdef extern from "ImageIO/CGImageDestination.h":
         CGImageRef image, CFDictionaryRef properties)
     int CGImageDestinationFinalize(CGImageDestinationRef idst)
 
+cdef extern from "Accelerate/Accelerate.h":
+    ctypedef struct vImage_Buffer:
+        void *data
+        int width
+        int height
+        size_t rowBytes
+
+    int vImagePermuteChannels_ARGB8888(
+            vImage_Buffer *src, vImage_Buffer *dst, unsigned char *permuteMap,
+            int flags)
+
 
 def load_image_data(bytes _url):
     # load an image from the _url with CoreGraphics, and output an RGBA string.
     cdef CFURLRef url
     url = CFURLCreateFromFileSystemRepresentation(NULL, <bytes> _url, len(_url), 0)
     cdef CGImageSourceRef myImageSourceRef = CGImageSourceCreateWithURL(url, NULL)
+    if not myImageSourceRef:
+        CFRelease(url)
+        raise ValueError('No image to load at %r' % _url)
     cdef CGImageRef myImageRef = CGImageSourceCreateImageAtIndex (myImageSourceRef, 0, NULL)
     cdef size_t width = CGImageGetWidth(myImageRef)
     cdef size_t height = CGImageGetHeight(myImageRef)
     cdef CGRect rect = CGRectMake(0, 0, width, height)
-    cdef void * myData = calloc(width * 4, height)
     cdef CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB()
+    cdef vImage_Buffer src
+    cdef vImage_Buffer dest
+    dest.height = src.height = height
+    dest.width = src.width = width
+    dest.rowBytes = src.rowBytes = width * 4
+    src.data = calloc(width * 4, height)
+    dest.data = calloc(width * 4, height)
+
 
     # endianness:  kCGBitmapByteOrder32Little = (2 << 12)
     # (2 << 12) | kCGImageAlphaPremultipliedLast)
     cdef CGContextRef myBitmapContext = CGBitmapContextCreate(
-            myData, width, height, 8, width*4, space,
+            src.data, width, height, 8, width * 4, space,
             kCGBitmapByteOrder32Host | kCGImageAlphaNoneSkipFirst)
 
     CGContextSetBlendMode(myBitmapContext, kCGBlendModeCopy)
     CGContextDrawImage(myBitmapContext, rect, myImageRef)
-    r_data = PyString_FromStringAndSize(<char *> myData, width * height * 4)
 
-    # Release image ref to avoid memory leak
+    # convert to RGBA using Accelerate framework
+    cdef unsigned char *pmap = [2, 1, 0, 3]
+    vImagePermuteChannels_ARGB8888(&src, &dest, pmap, 0)
+
+    # get a python string
+    r_data = PyString_FromStringAndSize(<char *>dest.data, width * height * 4)
+
+    # release everything
     CFRelease(url)
-    CGImageRelease(myImageSourceRef)
+    CGImageRelease(<CGImageRef>myImageSourceRef)
     CFRelease(myImageRef)
     CGContextRelease(myBitmapContext)
     CGColorSpaceRelease(space)
-    free(myData)
+    free(src.data)
+    free(dest.data)
 
-    return (width, height, 'bgra', r_data)
+    return (width, height, 'rgba', r_data)
 
 def save_image_rgba(filename, width, height, data):
+    # compatibility, could be removed i guess
+    save_image(filename, width, height, 'rgba', data)
+
+def save_image(filename, width, height, fmt, data):
     # save a RGBA string into filename using CoreGraphics
 
     # FIXME only png output are accepted.
@@ -162,38 +194,40 @@ def save_image_rgba(filename, width, height, data):
     # the type of the output file. So we need to map the extension of the
     # filename into a CoreGraphics image domain type.
 
-    assert(len(data) == width * height * 4)
-    assert(filename.endswith('.png'))
+    fileformat = 'public.png'
+    if filename.endswith('.png'):
+        fileformat = 'public.png'
+    if filename.endswith('.jpg') or filename.endswith('.jpeg'):
+        fileformat = 'public.jpeg'
 
     cdef char *source = NULL
     if type(data) is array:
         data = data.tostring()
     source = <bytes>data[:len(data)]
 
-    cdef char *rgba = <char *>malloc(int(width * height * 4))
-    memcpy(rgba, <void *>source, int(width * height * 4))
+    cdef int fmt_length = 3
+    if fmt == 'rgba':
+        fmt_length = 4
+    cdef char *pixels = <char *>malloc(int(width * height * fmt_length))
+    memcpy(pixels, <void *>source, int(width * height * fmt_length))
 
     cdef CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB()
     cdef CGContextRef bitmapContext = CGBitmapContextCreate(
-        rgba,
-        width,
-        height,
+        pixels, width, height,
         8, # bitsPerComponent
-        4 * width, # bytesPerRow
+        fmt_length * width, # bytesPerRow
         colorSpace,
         kCGImageAlphaNoneSkipLast)
 
     cdef CGImageRef cgImage = CGBitmapContextCreateImage(bitmapContext)
-    cdef char *cfilename = <char *>malloc(len(filename) + 1)
-    memcpy(cfilename, <char *><bytes>filename, len(filename));
-    cfilename[len(filename)] = <char>0
+    cdef char *cfilename = <char *><bytes>filename
 
     cdef CFStringRef sfilename = CFStringCreateWithCString(NULL,
             cfilename, kCFStringEncodingUTF8)
     cdef CFURLRef url = CFURLCreateWithFileSystemPath(NULL,
             sfilename, kCFURLPOSIXPathStyle, 0)
     cdef CFStringRef ctype = CFStringCreateWithCString(NULL,
-            "public.png", kCFStringEncodingUTF8)
+            fileformat, kCFStringEncodingUTF8)
 
     cdef CGImageDestinationRef dest = CGImageDestinationCreateWithURL(url,
             ctype, 1, NULL)
@@ -204,7 +238,7 @@ def save_image_rgba(filename, width, height, data):
     CFRelease(bitmapContext)
     CFRelease(colorSpace)
     CGImageDestinationFinalize(dest)
-    free(rgba)
+    free(pixels)
 
 class ImageLoaderImageIO(ImageLoaderBase):
     '''Image loader based on ImageIO MacOSX Framework
@@ -226,7 +260,17 @@ class ImageLoaderImageIO(ImageLoaderBase):
             Logger.warning('Image: Unable to load image <%s>' % filename)
             raise Exception('Unable to load image')
         w, h, imgtype, data = ret
-        return (ImageData(w, h, imgtype, data), )
+        return [ImageData(w, h, imgtype, data, source=filename)]
+
+    @staticmethod
+    def can_save():
+        return True
+
+    @staticmethod
+    def save(filename, width, height, fmt, pixels):
+        save_image(filename, width, height, fmt, pixels)
+        return True
 
 # register
 ImageLoader.register(ImageLoaderImageIO)
+

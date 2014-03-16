@@ -1,5 +1,4 @@
-'''
-Kivy Language
+'''Kivy Language
 =============
 
 The Kivy language is a language dedicated to describing user interface and
@@ -7,6 +6,17 @@ interactions. You could compare this language to Qt's QML
 (http://qt.nokia.com), but we included new concepts such as rule definitions
 (which are somewhat akin to what you may know from CSS), templating and so on.
 
+.. versionchanged:: 1.7.0
+
+    The Builder doesn't execute canvas expressions in realtime anymore. It will
+    pack all the expressions that need to be executed first and execute them
+    after dispatching input, just before drawing the frame. If you want to
+    force the execution of canvas drawing, just call
+    :meth:`Builder.sync <BuilderBase.sync>`.
+
+    An experimental profiling tool for the kv lang is also included. You can
+    activate it by setting the environment variable `KIVY_PROFILE_LANG=1`.
+    It will then generate an html file named `builder_stats.html`.
 
 Overview
 --------
@@ -19,7 +29,7 @@ The language consists of several constructs that you can use:
         certain way.
         You can use rules to specify interactive behaviour or use them to add
         graphical representations of the widgets they apply to.
-        You can target a specific class of widgets (similar to CSS'
+        You can target a specific class of widgets (similar to the CSS
         concept of a *class*) by using the ``cls`` attribute (e.g.
         ``cls=MyTestWidget``).
 
@@ -27,12 +37,16 @@ The language consists of several constructs that you can use:
         You can use the language to create your entire user interface.
         A kv file must contain only one root widget at most.
 
-    Templates
-        *(introduced in version 1.0.5.)*
-        Templates will be used to populate parts of your application, such as a
-        list's content. If you want to design the look of an entry in a list
-        (icon on the left, text on the right), you will use a template
-        for that.
+    Dynamic Classes
+        *(introduced in version 1.7.0)*
+        Dynamic classes let you create new widgets and rules on-the-fly,
+        without any Python declaration.
+
+    Templates (deprecated)
+        *(introduced in version 1.0.5, deprecated from version 1.7.0)*
+        Templates were used to populate parts of an application, such as
+        styling the content of a list (e.g. icon on the left, text on the
+        right). They are now deprecated by dynamic classes.
 
 
 Syntax of a kv File
@@ -42,18 +56,19 @@ Syntax of a kv File
 
 A Kivy language file must have ``.kv`` as filename extension.
 
-The content of the file must always start with the Kivy header, where `version`
-must be replaced with the Kivy language version you're using. For now, use
-1.0::
+The content of the file should always start with the Kivy header, where
+`version` must be replaced with the Kivy language version you're using.
+For now, use 1.0::
 
-    #:kivy `version`
+    #:kivy `1.0`
 
     # content here
 
-The `content` can contain rule definitions, a root widget and templates::
+The `content` can contain rule definitions, a root widget, dynamic class
+definitions and templates::
 
     # Syntax of a rule definition. Note that several Rules can share the same
-    # definition (as in CSS). Note the braces; They are part of the definition.
+    # definition (as in CSS). Note the braces: they are part of the definition.
     <Rule1,Rule2>:
         # .. definitions ..
 
@@ -64,14 +79,18 @@ The `content` can contain rule definitions, a root widget and templates::
     RootClassName:
         # .. definitions ..
 
+    # Syntax for creating a dynamic class
+    <NewWidget@BaseClass>:
+        # .. definitions ..
+
     # Syntax for create a template
     [TemplateName@BaseClass1,BaseClass2]:
         # .. definitions ..
 
-Regardless of whether it's a rule, root widget or template you're defining,
-the definition should look like this::
+Regardless of whether it's a rule, root widget, dynamic class or
+template you're defining, the definition should look like this::
 
-    # With the braces it's a rule; Without them it's a root widget.
+    # With the braces it's a rule. Without them, it's a root widget.
     <ClassName>:
         prop1: value1
         prop2: value2
@@ -93,9 +112,11 @@ automatically created and added to the instance.
 `AnotherClass` will be created and added as a child of the `ClassName`
 instance.
 
-- The indentation is important, and must be 4 spaces. Tabs are not allowed.
+- The indentation is important and must be consistent. The spacing must be a
+  multiple of the number of spaces used on the first indented line. Spaces
+  are encouraged: mixing tabs and spaces is not recommended.
 - The value of a property must be given on a single line (for now at least).
-- The `canvas` property is special: You can put graphics instructions in it
+- The `canvas` property is special: you can put graphics instructions in it
   to create a graphical representation of the current class.
 
 
@@ -107,10 +128,21 @@ Here is a simple example of a kv file that contains a root widget::
         text: 'Hello world'
 
 
-Value Expressions and Reserved Keywords
----------------------------------------
+.. versionchanged:: 1.7.0
 
-When you specify a property's value, the value is evaluated as a python
+    The indentation is not limited to 4 spaces anymore. The spacing must be a
+    multiple of the number of spaces used on the first indented line.
+
+Both the :meth:`~BuilderBase.load_file` and the
+:meth:`~BuilderBase.load_string` methods
+return the root widget defined in your kv file/string. They will also add any
+class and template definitions to the :class:`~kivy.factory.Factory` for later
+usage.
+
+Value Expressions, on_property Expressions, and Reserved Keywords
+-----------------------------------------------------------------
+
+When you specify a property's value, the value is evaluated as a Python
 expression. This expression can be static or dynamic, which means that
 the value can use the values of other properties using reserved keywords.
 
@@ -121,13 +153,27 @@ the value can use the values of other properties using reserved keywords.
                 text: 'My state is %s' % self.state
 
     root
-        This keyword is available only in rule definitions, and represents the
+        This keyword is available only in rule definitions and represents the
         root widget of the rule (the first instance of the rule)::
 
             <Widget>:
                 custom: 'Hello world'
                 Button:
                     text: root.custom
+
+    app
+        This keyword always refers to your app instance. It's equivalent
+        to a call to :meth:`kivy.app.App.get_running_app` in Python.::
+
+            Label:
+                text: app.name
+
+    args
+        This keyword is available in on_<action> callbacks. It refers to the
+        arguments passed to the callback.::
+
+            TextInput:
+                on_focus: self.insert_text("Focus" if args[1] else "No focus")
 
 Furthermore, if a class definition contains an id, you can use it as a
 keyword::
@@ -138,17 +184,55 @@ keyword::
         Button:
             text: 'The state of the other button is %s' % btn1.state
 
-Please note that the `id` will not be available in the widget instance;
-The `id` attribute will be not used.
+Please note that the `id` will not be available in the widget instance:
+it is used exclusively for external references. `id` is a weakref to the
+widget, and not the widget itself. The widget itself can be accessed
+with `id.__self__` (`btn1.__self__` in this case).
 
+Valid expressons
+~~~~~~~~~~~~~~~~
+
+There are two places that accept python statments in a kv file:
+after a property, which assigns to the property the result of the expression
+(such as the text of a button as shown above) and after a on_property, which
+executes the statement when the property is updated (such as on_state).
+
+In the former case, the
+`expression <http://docs.python.org/2/reference/expressions.html>`_ can only
+span a single line, cannot be extended to multiple lines using newline
+escaping, and must return a value. An example of a valid expression is
+``text: self.state and ('up' if self.state == 'normal' else 'down')``.
+
+In the latter case, multiple single line statements are valid including
+multi-line statements that escape their newline, as long as they don't
+add an indentation level.
+
+Examples of valid statements are::
+
+    on_press: if self.state == 'normal': print('normal')
+    on_state:
+        if self.state == 'normal': print('normal')
+        else: print('down')
+        if self.state == 'normal': \
+        print('multiline normal')
+        for i in range(10): print(i)
+        print([1,2,3,4,
+        5,6,7])
+
+An example of a invalid statement::
+
+    on_state:
+        if self.state == 'normal':
+            print('normal')
 
 Relation Between Values and Properties
 --------------------------------------
 
 When you use the Kivy language, you might notice that we do some work
 behind the scenes to automatically make things work properly. You should
-know that :doc:`api-kivy.properties` implement the *observer* software
-design pattern: That means that you can bind your own function to be
+know that :doc:`api-kivy.properties` implement the
+`Observer Design Pattern <http://en.wikipedia.org/wiki/Observer_pattern>`_.
+That means that you can bind your own function to be
 called when the value of a property changes (i.e. you passively
 `observe` the property for potential changes).
 
@@ -162,7 +246,7 @@ Here's a simple example that demonstrates this behaviour::
         text: str(self.state)
 
 In this example, the parser detects that `self.state` is a dynamic value (a
-property). The :data:`~kivy.uix.button.Button.state` property of the button
+property). The :attr:`~kivy.uix.button.Button.state` property of the button
 can change at any moment (when the user touches it).
 We now want this button to display its own state as text, even as the state
 changes. To do this, we use the state property of the Button and use it in the
@@ -185,8 +269,8 @@ change to 'Release me!'.
 Graphical Instructions
 ----------------------
 
-The graphical instructions are a special part of the Kivy language. This
-concerns the 'canvas' property definition::
+The graphical instructions are a special part of the Kivy language. They are
+handled by the 'canvas' property definition::
 
     Widget:
         canvas:
@@ -201,12 +285,12 @@ All the classes added inside the canvas property must be derived from the
 inside the canvas property (as that would not make sense because a
 widget is not a graphics instruction).
 
-If you want to do theming, you'll have the same question as in CSS: You don't
-know which rules have been executed before. In our case, the rules are executed
+If you want to do theming, you'll have the same question as in CSS: which rules
+have been executed first? In our case, the rules are executed
 in processing order (i.e. top-down).
 
 If you want to change how Buttons are rendered, you can create your own kv file
-and put something like this::
+and add something like this::
 
     <Button>:
         canvas:
@@ -220,7 +304,7 @@ and put something like this::
                 size: self.texture_size
                 texture: self.texture
 
-This will result in buttons having a red background, with the label in the
+This will result in buttons having a red background with the label in the
 bottom left, in addition to all the preceding rules.
 You can clear all the previous instructions by using the `Clear` command::
 
@@ -240,23 +324,115 @@ You can clear all the previous instructions by using the `Clear` command::
 Then, only your rules that follow the `Clear` command will be taken into
 consideration.
 
+.. _dynamic_classes:
+
+Dynamic classes
+---------------
+
+Dynamic classes allow you to create new widgets on-the-fly, without any python
+declaration in the first place. The syntax of the dynamic classes is similar to
+the Rules, but you need to specify the base classes you want to
+subclass.
+
+The syntax looks like:
+
+.. code-block:: kv
+
+    # Simple inheritance
+    <NewWidget@Button>:
+        # kv code here ...
+
+    # Multiple inheritance
+    <NewWidget@ButtonBehavior+Label>:
+        # kv code here ...
+
+The `@` character is used to seperate your class name from the classes you want
+to subclass. The Python equivalent would have been:
+
+.. code-block:: python
+
+    # Simple inheritance
+    class NewWidget(Button):
+        pass
+
+    # Multiple inheritance
+    class NewWidget(ButtonBehavior, Label):
+        pass
+
+Any new properties, usually added in python code, should be declared
+first.  If the property doesn't exist in the dynamic class, it will be
+automatically created as an :class:`~kivy.properties.ObjectProperty`
+(pre 1.8.0) or as an appropriate typed property (from version
+1.8.0).
+
+.. versionchanged:: 1.8.0
+
+    If the property value is an expression that can be evaluated right away (no
+    external binding), then the value will be used as default value of the
+    property, and the type of the value will be used for the specialization of
+    the Property class. In other terms: if you declare `hello: "world"`, a new
+    :class:`~kivy.properties.StringProperty` will be instanciated, with the
+    default value `"world"`. Lists, tuples, dictionaries and strings are
+    supported.
+
+Let's illustrate the usage of theses dynamic classes with an
+implementation of a basic Image button. We could derive our classes from
+the Button and just add a property for the image filename:
+
+.. code-block:: kv
+
+    <ImageButton@Button>:
+        source: None
+
+        Image:
+            source: root.source
+            pos: root.pos
+            size: root.size
+
+    # let's use the new classes in another rule:
+    <MainUI>:
+        BoxLayout:
+            ImageButton:
+                source: 'hello.png'
+                on_press: root.do_something()
+            ImageButton:
+                source: 'world.png'
+                on_press: root.do_something_else()
+
+In Python, you can create an instance of the dynamic class as follows:
+
+.. code-block:: python
+
+    from kivy.factory import Factory
+    button_inst = Factory.ImageButton()
+
+.. note::
+
+    Using dynamic classes, a child class can be declared before it's parent.
+    This however, leads to the unintuitive situation where the parent
+    properties/methods override those of the child. Be careful if you choose
+    to do this.
 
 .. _template_usage:
 
 Templates
 ---------
 
-.. versionadded:: 1.0.5
+.. versionchanged:: 1.7.0
 
-Syntax of template
-~~~~~~~~~~~~~~~~~~
+    Template usage is now deprecated. Please use Dynamic classes instead.
 
-Using a template in Kivy require 2 things :
+Syntax of templates
+~~~~~~~~~~~~~~~~~~~
 
-    #. a context to pass for the context (will be ctx inside template)
-    #. a kv definition of the template
+Using a template in Kivy requires 2 things :
 
-Syntax of a template::
+    #. a context to pass for the context (will be ctx inside template).
+    #. a kv definition of the template.
+
+Syntax of a template:
+
+.. code-block:: kv
 
     # With only one base class
     [ClassName@BaseClass]:
@@ -268,9 +444,11 @@ Syntax of a template::
 
 For example, for a list, you'll need to create a entry with a image on
 the left, and a label on the right. You can create a template for making
-that definition more easy to use.
-So, we'll create a template that require 2 entry in the context: a image
-filename and a title::
+that definition easier to use.
+So, we'll create a template that uses 2 entries in the context: an image
+filename and a title:
+
+.. code-block:: kv
 
     [IconItem@BoxLayout]:
         Image:
@@ -278,9 +456,9 @@ filename and a title::
         Label:
             text: ctx.title
 
-.. highlight:: python
+Then in Python, you can instanciate the template using:
 
-Then in Python, you can create instanciate the template with::
+.. code-block:: python
 
     from kivy.lang import Builder
 
@@ -290,7 +468,7 @@ Then in Python, you can create instanciate the template with::
     icon1 = Builder.template('IconItem', title='Hello world',
         image='myimage.png')
 
-    # create a second template with another information
+    # create a second template with other information
     ctx = {'title': 'Another hello world',
            'image': 'myimage2.png'}
     icon2 = Builder.template('IconItem', **ctx)
@@ -300,11 +478,12 @@ Then in Python, you can create instanciate the template with::
 Template example
 ~~~~~~~~~~~~~~~~
 
-.. highlight:: kv
+Most of time, when you are creating a screen in the kv lang, you use a lot of
+redefinitions. In our example, we'll create a Toolbar, based on a
+BoxLayout, and put in a few :class:`~kivy.uix.image.Image` widgets that
+will react to the *on_touch_down* event.:
 
-Most of time, when you are creating screen into kv lang, you have lot of
-redefinition. In our example, we'll create a Toolbar, based on a BoxLayout, and
-put many Image that will react to on_touch_down::
+.. code-block:: kv
 
     <MyToolbar>:
         BoxLayout:
@@ -332,19 +511,23 @@ put many Image that will react to on_touch_down::
 We can see that the size and size_hint attribute are exactly the same.
 More than that, the callback in on_touch_down and the image are changing.
 Theses can be the variable part of the template that we can put into a context.
-Let's try to create a template for the Image::
+Let's try to create a template for the Image:
+
+.. code-block:: kv
 
     [ToolbarButton@Image]:
 
         # This is the same as before
-        source: 'data/%s.png' % ctx.image
         size: self.texture_size
         size_hint: None, None
 
         # Now, we are using the ctx for the variable part of the template
-        on_touch_down: self.collide_point(*args[1].pos) and self.callback()
+        source: 'data/%s.png' % ctx.image
+        on_touch_down: self.collide_point(*args[1].pos) and ctx.callback()
 
-The template can be used directly in the MyToolbar rule::
+The template can be used directly in the MyToolbar rule:
+
+.. code-block:: kv
 
     <MyToolbar>:
         BoxLayout:
@@ -366,7 +549,9 @@ Template limitations
 
 When you are creating a context:
 
-    #. you cannot use references other than "root"::
+    #. you cannot use references other than "root":
+
+    .. code-block:: kv
 
         <MyRule>:
             Widget:
@@ -375,7 +560,9 @@ When you are creating a context:
             Template:
                 ctxkey: mywidget.value # << fail, this reference mywidget id
 
-    #. all the dynamic part will be not understood::
+    #. not all of the dynamic parts will be understood:
+
+    .. code-block:: kv
 
         <MyRule>:
             Template:
@@ -383,11 +570,45 @@ When you are creating a context:
                 # root.prop1 is a property, the context will not update the
                 # context
 
+Redefining a widget's style
+---------------------------
+
+Sometimes we would like to inherit from a widget in order to use its Python
+properties without also using its .kv defined style. For example, we would
+like to inherit from a Label, but we would also like to define our own
+canvas instructions instead of automatically using the canvas instructions
+inherited from the Label. We can achieve this by prepending a dash (-) before
+the class name in the .kv style definition.
+
+In myapp.py:
+
+.. code-block:: python
+
+    class MyWidget(Label):
+        pass
+
+and in my.kv:
+
+.. code-block:: kv
+
+    <-MyWidget>:
+        canvas:
+            Color:
+                rgb: 1, 1, 1
+            Rectangle:
+                size: (32, 32)
+
+MyWidget will now have a Color and Rectangle instruction in its canvas
+without any of the instructions inherited from the Label.
+
 Lang Directives
 ---------------
 
-You can use directive to control part of the lang files. Directive is done with
-a comment line starting with::
+You can use directives to add declarative commands, such as imports or constant
+definitions, to the lang files. Directives are added as comments in the
+following format:
+
+.. code-block:: kv
 
     #:<directivename> <options>
 
@@ -396,11 +617,15 @@ import <package>
 
 .. versionadded:: 1.0.5
 
-Syntax::
+Syntax:
+
+.. code-block:: kv
 
     #:import <alias> <package>
 
-You can import a package by writing::
+You can import a package by writing:
+
+.. code-block:: kv
 
     #:import os os
 
@@ -408,7 +633,9 @@ You can import a package by writing::
         Button:
             text: os.getcwd()
 
-Or more complex::
+Or more complex:
+
+.. code-block:: kv
 
     #:import ut kivy.utils
 
@@ -419,7 +646,9 @@ Or more complex::
 
 .. versionadded:: 1.0.7
 
-You can directly import class from a module::
+You can directly import classes from a module:
+
+.. code-block:: kv
 
     #: import Animation kivy.animation.Animation
     <Rule>:
@@ -430,11 +659,15 @@ set <key> <expr>
 
 .. versionadded:: 1.0.6
 
-Syntax::
+Syntax:
+
+.. code-block:: kv
 
     #:set <key> <expr>
 
-Set a key that will be available anywhere in the kv. For example::
+Set a key that will be available anywhere in the kv. For example:
+
+.. code-block:: kv
 
     #:set my_color (.4, .3, .4)
     #:set my_color_hl (.5, .4, .5)
@@ -444,7 +677,56 @@ Set a key that will be available anywhere in the kv. For example::
         canvas:
             Color:
                 rgb: my_color if self.state == 'normal' else my_color_hl
+
+include <file>
+~~~~~~~~~~~~~~~~
+
+.. versionadded:: 1.8.1
+
+Syntax:
+
+.. code-block:: kv
+
+    #:include [force] <file>
+
+Includes an external kivy file. This allows you to split complex
+widgets into their own files. If the include is forced, the file
+will first be unloaded and then reloaded again. For example:
+
+.. code-block:: kv
+
+    # Test.kv
+    #:include mycomponent.kv
+    #:include force mybutton.kv
+
+    <Rule>:
+        state: 'normal'
+        MyButton:
+        MyComponent:
+
+
+.. code-block:: kv
+
+    # mycomponent.kv
+    #:include mybutton.kv
+
+    <MyComponent>:
+        MyButton:
+
+.. code-block:: kv
+
+    # mybutton.kv
+
+    <MyButton>:
+        canvas:
+            Color:
+                rgb: (1.0, 0.0, 0.0)
+            Rectangle:
+                pos: self.pos
+                size: (self.size[0]/4, self.size[1]/4)
+
 '''
+import os
 
 __all__ = ('Builder', 'BuilderBase', 'BuilderException',
            'Parser', 'ParserException')
@@ -453,17 +735,21 @@ import codecs
 import re
 import sys
 from re import sub, findall
+from os import environ
 from os.path import join
 from copy import copy
-from types import ClassType, CodeType
+from types import CodeType
 from functools import partial
+from collections import OrderedDict
 from kivy.factory import Factory
 from kivy.logger import Logger
-from kivy.utils import OrderedDict, QueryDict
+from kivy.utils import QueryDict
 from kivy.cache import Cache
 from kivy import kivy_data_dir, require
-from kivy.lib.debug import make_traceback
-import kivy.metrics as metrics
+from kivy.compat import PY2, iteritems, iterkeys
+from kivy.context import register_context
+from kivy.resources import resource_find
+import kivy.metrics as Metrics
 
 
 trace = Logger.trace
@@ -475,10 +761,21 @@ Instruction = None
 # register cache for creating new classtype (template)
 Cache.register('kv.lang')
 
+# all previously included files
+__KV_INCLUDES__ = []
+
 # precompile regexp expression
 lang_str = re.compile('([\'"][^\'"]*[\'"])')
 lang_key = re.compile('([a-zA-Z_]+)')
 lang_keyvalue = re.compile('([a-zA-Z_][a-zA-Z0-9_.]*\.[a-zA-Z0-9_.]+)')
+lang_tr = re.compile('(_\()')
+
+# delayed calls are canvas expression triggered during an loop
+_delayed_calls = []
+
+# all the widget handlers, used to correctly unbind all the callbacks then the
+# widget is deleted
+_handlers = {}
 
 
 class ProxyApp(object):
@@ -497,6 +794,9 @@ class ProxyApp(object):
             from kivy.app import App
             app = App.get_running_app()
             object.__setattr__(self, '_obj', app)
+            # Clear cached application instance, when it stops
+            app.bind(on_stop=lambda instance:
+                     object.__setattr__(self, '_obj', None))
         return app
 
     def __getattribute__(self, name):
@@ -511,7 +811,7 @@ class ProxyApp(object):
         object.__getattribute__(self, '_ensure_app')()
         setattr(object.__getattribute__(self, '_obj'), name, value)
 
-    def __nonzero__(self):
+    def __bool__(self):
         object.__getattribute__(self, '_ensure_app')()
         return bool(object.__getattribute__(self, '_obj'))
 
@@ -525,12 +825,12 @@ class ProxyApp(object):
 
 
 global_idmap['app'] = ProxyApp()
-global_idmap['pt'] = metrics.pt
-global_idmap['inch'] = metrics.inch
-global_idmap['cm'] = metrics.cm
-global_idmap['mm'] = metrics.mm
-global_idmap['dp'] = metrics.dp
-global_idmap['sp'] = metrics.sp
+global_idmap['pt'] = Metrics.pt
+global_idmap['inch'] = Metrics.inch
+global_idmap['cm'] = Metrics.cm
+global_idmap['mm'] = Metrics.mm
+global_idmap['dp'] = Metrics.dp
+global_idmap['sp'] = Metrics.sp
 
 
 class ParserException(Exception):
@@ -564,11 +864,11 @@ class BuilderException(ParserException):
 
 
 class ParserRuleProperty(object):
-    '''Represent a property inside a rule
+    '''Represent a property inside a rule.
     '''
 
     __slots__ = ('ctx', 'line', 'name', 'value', 'co_value',
-                 'watched_keys', 'mode')
+                 'watched_keys', 'mode', 'count')
 
     def __init__(self, ctx, line, name, value):
         super(ParserRuleProperty, self).__init__()
@@ -586,6 +886,8 @@ class ParserRuleProperty(object):
         self.mode = None
         #: Watched keys
         self.watched_keys = None
+        #: Stats
+        self.count = 0
 
     def precompile(self):
         name = self.name
@@ -606,7 +908,12 @@ class ParserRuleProperty(object):
                 return
 
         # ok, we can compile.
+        value = '\n' * self.line + value
         self.co_value = compile(value, self.ctx.filename or '<string>', mode)
+
+        # for exec mode, we don't need to watch any keys.
+        if mode == 'exec':
+            return
 
         # now, detect obj.prop
         # first, remove all the string from the value
@@ -615,6 +922,11 @@ class ParserRuleProperty(object):
         wk = list(set(findall(lang_keyvalue, tmp)))
         if len(wk):
             self.watched_keys = [x.split('.') for x in wk]
+        if findall(lang_tr, tmp):
+            if self.watched_keys:
+                self.watched_keys += [['_']]
+            else:
+                self.watched_keys = [['_']]
 
     def __repr__(self):
         return '<ParserRuleProperty name=%r filename=%s:%d ' \
@@ -624,12 +936,12 @@ class ParserRuleProperty(object):
 
 
 class ParserRule(object):
-    '''Represent a rule, in term if Kivy internal language
+    '''Represents a rule, in terms of the Kivy internal language.
     '''
 
     __slots__ = ('ctx', 'line', 'name', 'children', 'id', 'properties',
                  'canvas_before', 'canvas_root', 'canvas_after',
-                 'handlers', 'level', 'cache_marked')
+                 'handlers', 'level', 'cache_marked', 'avoid_previous_rules')
 
     def __init__(self, ctx, line, name, level):
         super(ParserRule, self).__init__()
@@ -657,6 +969,8 @@ class ParserRule(object):
         self.handlers = []
         #: Properties cache list: mark which class have already been checked
         self.cache_marked = []
+        #: Indicate if any previous rules should be avoided.
+        self.avoid_previous_rules = False
 
         if level == 0:
             self._detect_selectors()
@@ -664,7 +978,7 @@ class ParserRule(object):
             self._forbid_selectors()
 
     def precompile(self):
-        for x in self.properties.itervalues():
+        for x in self.properties.values():
             x.precompile()
         for x in self.handlers:
             x.precompile()
@@ -684,8 +998,12 @@ class ParserRule(object):
             return
         self.cache_marked.append(cls)
         for name in self.properties:
-            if not hasattr(widget, name):
-                widget.create_property(name)
+            if hasattr(widget, name):
+                continue
+            value = self.properties[name].co_value
+            if type(value) is CodeType:
+                value = None
+            widget.create_property(name, value)
 
     def _forbid_selectors(self):
         c = self.name[0]
@@ -714,18 +1032,43 @@ class ParserRule(object):
         if name[0] != '<' or name[-1] != '>':
             raise ParserException(self.ctx, self.line,
                                   'Invalid rule (must be inside <>)')
-        rules = name[1:-1].split(',')
+
+        # if the very first name start with a -, avoid previous rules
+        name = name[1:-1]
+        if name[:1] == '-':
+            self.avoid_previous_rules = True
+            name = name[1:]
+
+        rules = name.split(',')
         for rule in rules:
+            crule = None
+
             if not len(rule):
                 raise ParserException(self.ctx, self.line,
                                       'Empty rule detected')
-            crule = None
-            if rule[0] == '.':
-                crule = ParserSelectorClass(rule[1:])
-            elif rule[0] == '#':
-                crule = ParserSelectorId(rule[1:])
-            else:
+
+            if '@' in rule:
+                # new class creation ?
+                # ensure the name is correctly written
+                rule, baseclasses = rule.split('@', 1)
+                if not re.match(lang_key, rule):
+                    raise ParserException(self.ctx, self.line,
+                                          'Invalid dynamic class name')
+
+                # save the name in the dynamic classes dict.
+                self.ctx.dynamic_classes[rule] = baseclasses
                 crule = ParserSelectorName(rule)
+
+            else:
+                # classical selectors.
+
+                if rule[0] == '.':
+                    crule = ParserSelectorClass(rule[1:])
+                elif rule[0] == '#':
+                    crule = ParserSelectorId(rule[1:])
+                else:
+                    crule = ParserSelectorName(rule)
+
             self.ctx.rules.append((crule, self))
 
     def _build_template(self):
@@ -751,14 +1094,14 @@ class Parser(object):
     '''
 
     PROP_ALLOWED = ('canvas.before', 'canvas.after')
-    CLASS_RANGE = range(ord('A'), ord('Z') + 1)
+    CLASS_RANGE = list(range(ord('A'), ord('Z') + 1))
     PROP_RANGE = (
-        range(ord('A'), ord('Z') + 1) +
-        range(ord('a'), ord('z') + 1) +
-        range(ord('0'), ord('9') + 1) + [ord('_')])
+        list(range(ord('A'), ord('Z') + 1)) +
+        list(range(ord('a'), ord('z') + 1)) +
+        list(range(ord('0'), ord('9') + 1)) + [ord('_')])
 
     __slots__ = ('rules', 'templates', 'root', 'sourcecode',
-                 'directives', 'filename')
+                 'directives', 'filename', 'dynamic_classes')
 
     def __init__(self, **kwargs):
         super(Parser, self).__init__()
@@ -767,6 +1110,7 @@ class Parser(object):
         self.root = None
         self.sourcecode = []
         self.directives = []
+        self.dynamic_classes = {}
         self.filename = kwargs.get('filename', None)
         content = kwargs.get('content', None)
         if content is None:
@@ -774,6 +1118,7 @@ class Parser(object):
         self.parse(content)
 
     def execute_directives(self):
+        global __KV_INCLUDES__
         for ln, cmd in self.directives:
             cmd = cmd.strip()
             if __debug__:
@@ -795,7 +1140,34 @@ class Parser(object):
                     Logger.exception('')
                     raise ParserException(self, ln, 'Invalid value')
                 global_idmap[name] = value
+            elif cmd[:8] == 'include ':
+                ref = cmd[8:].strip()
+                force_load = False
 
+                if ref[:6] == 'force ':
+                    ref = ref[6:].strip()
+                    force_load = True
+
+                if ref[-3:] != '.kv':
+                    Logger.warn('WARNING: {0} does not have a valid Kivy'
+                                'Language extension (.kv)'.format(ref))
+                    break
+                if ref in __KV_INCLUDES__:
+                    if not force_load:
+                        Logger.warn('WARNING: {0} has already been included!'
+                                    .format(ref))
+                        break
+                    else:
+                        Logger.debug('Reloading {0} because include was forced.'
+                                    .format(ref))
+                        Builder.unload_file(ref)
+                        Builder.load_file(ref)
+                if not os.path.isfile(ref):
+                    raise ParserException(self, ln, 'Invalid or unknown file: '
+                                                    '{0}'.format(ref))
+                Logger.debug('Including file: {0}'.format(0))
+                __KV_INCLUDES__.append(ref)
+                Builder.load_file(ref)
             elif cmd[:7] == 'import ':
                 package = cmd[7:].strip()
                 l = package.split(' ')
@@ -831,7 +1203,7 @@ class Parser(object):
         if not lines:
             return
         num_lines = len(lines)
-        lines = zip(range(num_lines), lines)
+        lines = list(zip(list(range(num_lines)), lines))
         self.sourcecode = lines[:]
 
         if __debug__:
@@ -859,7 +1231,7 @@ class Parser(object):
     def strip_comments(self, lines):
         '''Remove all comments from all lines in-place.
            Comments need to be on a single line and not at the end of a line.
-           I.e., a comment line's first non-whitespace character must be a #.
+           i.e. a comment line's first non-whitespace character must be a #.
         '''
         # extract directives
         for ln, line in lines[:]:
@@ -871,10 +1243,10 @@ class Parser(object):
             if not stripped:
                 lines.remove((ln, line))
 
-    def parse_level(self, level, lines):
-        '''Parse the current level (level * 4) indentation.
+    def parse_level(self, level, lines, spaces=0):
+        '''Parse the current level (level * spaces) indentation.
         '''
-        indent = 4 * level
+        indent = spaces * level if spaces > 0 else 0
         objects = []
 
         current_object = None
@@ -891,14 +1263,20 @@ class Parser(object):
             # Replace any tab with 4 spaces
             tmp = content[:len(content) - len(tmp)]
             tmp = tmp.replace('\t', '    ')
+
+            # first indent designates the indentation
+            if spaces == 0:
+                spaces = len(tmp)
+
             count = len(tmp)
 
-            if count % 4 != 0:
+            if spaces > 0 and count % spaces != 0:
                 raise ParserException(self, ln,
                                       'Invalid indentation, '
-                                      'must be a multiple of 4 spaces')
+                                      'must be a multiple of '
+                                      '%s spaces' % spaces)
             content = content.strip()
-            rlevel = count // 4
+            rlevel = count // spaces if spaces > 0 else 0
 
             # Level finished
             if count < indent:
@@ -909,7 +1287,8 @@ class Parser(object):
                 x = content.split(':', 1)
                 if not len(x[0]):
                     raise ParserException(self, ln, 'Identifier missing')
-                if len(x) == 2 and len(x[1]):
+                if (len(x) == 2 and len(x[1]) and
+                    not x[1].lstrip().startswith('#')):
                     raise ParserException(self, ln,
                                           'Invalid data after declaration')
                 name = x[0]
@@ -924,7 +1303,7 @@ class Parser(object):
                 objects.append(current_object)
 
             # Next level, is it a property or an object ?
-            elif count == indent + 4:
+            elif count == indent + spaces:
                 x = content.split(':', 1)
                 if not len(x[0]):
                     raise ParserException(self, ln, 'Identifier missing')
@@ -933,7 +1312,8 @@ class Parser(object):
                 current_property = None
                 name = x[0]
                 if ord(name[0]) in Parser.CLASS_RANGE or name[0] == '+':
-                    _objects, _lines = self.parse_level(level + 1, lines[i:])
+                    _objects, _lines = self.parse_level(
+                        level + 1, lines[i:], spaces)
                     current_object.children = _objects
                     lines = _lines
                     i = 0
@@ -966,10 +1346,11 @@ class Parser(object):
                         current_propobject = None
 
             # Two more levels?
-            elif count == indent + 8:
+            elif count == indent + 2 * spaces:
                 if current_property in (
                         'canvas', 'canvas.after', 'canvas.before'):
-                    _objects, _lines = self.parse_level(level + 2, lines[i:])
+                    _objects, _lines = self.parse_level(
+                        level + 2, lines[i:], spaces)
                     rl = ParserRule(self, ln, current_property, rlevel)
                     rl.children = _objects
                     if current_property == 'canvas':
@@ -1004,33 +1385,44 @@ class Parser(object):
         return objects, []
 
 
+def get_proxy(widget):
+    try:
+        return widget.proxy_ref
+    except AttributeError:
+        return widget
+
+
 def custom_callback(__kvlang__, idmap, *largs, **kwargs):
     idmap['args'] = largs
-    try:
-        exec __kvlang__.co_value in idmap
-    except:
-        exc_info = sys.exc_info()
-        traceback = make_traceback(exc_info)
-        exc_type, exc_value, tb = traceback.standard_exc_info
-        raise exc_type, exc_value, tb
+    exec(__kvlang__.co_value, idmap)
 
 
-def create_handler(iself, element, key, value, rule, idmap):
+def create_handler(iself, element, key, value, rule, idmap, delayed=False):
     locals()['__kvlang__'] = rule
 
     # create an handler
+    uid = iself.uid
+    if uid not in _handlers:
+        _handlers[uid] = []
+
     idmap = copy(idmap)
     idmap.update(global_idmap)
-    idmap['self'] = iself
+    idmap['self'] = iself.proxy_ref
 
-    def call_fn(sender, _value):
+    def call_fn(*args):
         if __debug__:
             trace('Builder: call_fn %s, key=%s, value=%r, %r' % (
                 element, key, value, rule.value))
+        rule.count += 1
         e_value = eval(value, idmap)
         if __debug__:
             trace('Builder: call_fn => value=%r' % (e_value, ))
         setattr(element, key, e_value)
+
+    def delayed_call_fn(*args):
+        _delayed_calls.append(call_fn)
+
+    fn = delayed_call_fn if delayed else call_fn
 
     # bind every key.value
     if rule.watched_keys is not None:
@@ -1040,7 +1432,9 @@ def create_handler(iself, element, key, value, rule, idmap):
                 for x in k[1:-1]:
                     f = getattr(f, x)
                 if hasattr(f, 'bind'):
-                    f.bind(**{k[-1]: call_fn})
+                    f.bind(**{k[-1]: fn})
+                    # make sure _handlers doesn't keep widgets alive
+                    _handlers[uid].append([get_proxy(f), k[-1], fn])
             except KeyError:
                 continue
             except AttributeError:
@@ -1048,8 +1442,9 @@ def create_handler(iself, element, key, value, rule, idmap):
 
     try:
         return eval(value, idmap)
-    except Exception, e:
-        raise BuilderException(rule.ctx, rule.line, str(e))
+    except Exception as e:
+        raise BuilderException(rule.ctx, rule.line,
+                               '{}: {}'.format(e.__class__.__name__, e))
 
 
 class ParserSelector(object):
@@ -1067,7 +1462,8 @@ class ParserSelector(object):
 class ParserSelectorId(ParserSelector):
 
     def match(self, widget):
-        return widget.id.lower() == self.key
+        if widget.id:
+            return widget.id.lower() == self.key
 
 
 class ParserSelectorClass(ParserSelector):
@@ -1101,29 +1497,33 @@ class ParserSelectorName(ParserSelector):
 
 
 class BuilderBase(object):
-    '''Builder is responsible for creating a :class:`Parser` for parsing a kv
-    file, merging the results to its internal rules, templates, etc.
+    '''The Builder is responsible for creating a :class:`Parser` for parsing a
+    kv file, merging the results into its internal rules, templates, etc.
 
-    By default, :class:`Builder` is the global Kivy instance used in widgets,
-    that you can use to load other kv file in addition to the default one.
+    By default, :class:`Builder` is a global Kivy instance used in widgets
+    that you can use to load other kv files in addition to the default ones.
     '''
 
     _cache_match = {}
 
     def __init__(self):
         super(BuilderBase, self).__init__()
+        self.files = []
+        self.dynamic_classes = {}
         self.templates = {}
         self.rules = []
         self.rulectx = {}
 
     def load_file(self, filename, **kwargs):
-        '''Insert a file into the language builder.
+        '''Insert a file into the language builder and return the root widget
+        (if defined) of the kv file.
 
         :parameters:
-            `rulesonly`: bool, default to False
+            `rulesonly`: bool, defaults to False
                 If True, the Builder will raise an exception if you have a root
                 widget inside the definition.
         '''
+        filename = resource_find(filename) or filename
         if __debug__:
             trace('Builder: load file %s' % filename)
         with open(filename, 'r') as fd:
@@ -1131,45 +1531,59 @@ class BuilderBase(object):
             data = fd.read()
 
             # remove bom ?
-            if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
-                raise ValueError('Unsupported UTF16 for kv files.')
-            if data.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
-                raise ValueError('Unsupported UTF32 for kv files.')
-            if data.startswith(codecs.BOM_UTF8):
-                data = data[len(codecs.BOM_UTF8):]
+            if PY2:
+                if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+                    raise ValueError('Unsupported UTF16 for kv files.')
+                if data.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+                    raise ValueError('Unsupported UTF32 for kv files.')
+                if data.startswith(codecs.BOM_UTF8):
+                    data = data[len(codecs.BOM_UTF8):]
 
             return self.load_string(data, **kwargs)
 
     def unload_file(self, filename):
-        '''Unload all rules associated to a previously imported file.
+        '''Unload all rules associated with a previously imported file.
 
         .. versionadded:: 1.0.8
 
         .. warning::
 
-            This will not remove rule or template already applied/used on
-            current widget. It will act only for the next widget creation or
+            This will not remove rules or templates already applied/used on
+            current widgets. It will only effect the next widgets creation or
             template invocation.
         '''
         # remove rules and templates
         self.rules = [x for x in self.rules if x[1].ctx.filename != filename]
         self._clear_matchcache()
         templates = {}
-        for x, y in self.templates.iteritems():
+        for x, y in self.templates.items():
             if y[2] != filename:
                 templates[x] = y
         self.templates = templates
+        if filename in self.files:
+            self.files.remove(filename)
+
+        # unregister all the dynamic classes
+        Factory.unregister_from_filename(filename)
 
     def load_string(self, string, **kwargs):
-        '''Insert a string into the Language Builder
+        '''Insert a string into the Language Builder and return the root widget
+        (if defined) of the kv string.
 
         :Parameters:
-            `rulesonly`: bool, default to False
+            `rulesonly`: bool, defaults to False
                 If True, the Builder will raise an exception if you have a root
                 widget inside the definition.
         '''
         kwargs.setdefault('rulesonly', False)
         self._current_filename = fn = kwargs.get('filename', None)
+
+        # put a warning if a file is loaded multiple times
+        if fn in self.files:
+            Logger.warning(
+                'Lang: The file {} is loaded multiples times, '
+                'you might have unwanted behaviors.'.format(fn))
+
         try:
             # parse the string
             parser = Parser(content=string, filename=fn)
@@ -1185,11 +1599,21 @@ class BuilderBase(object):
                                  cls=partial(self.template, name),
                                  is_template=True)
 
+            # register all the dynamic classes
+            for name, baseclasses in iteritems(parser.dynamic_classes):
+                Factory.register(name, baseclasses=baseclasses, filename=fn)
+
             # create root object is exist
             if kwargs['rulesonly'] and parser.root:
                 filename = kwargs.get('rulesonly', '<string>')
                 raise Exception('The file <%s> contain also non-rules '
                                 'directives' % filename)
+
+            # save the loaded files only if there is a root without
+            # template/dynamic classes
+            if fn and (parser.templates or
+                       parser.dynamic_classes or parser.rules):
+                self.files.append(fn)
 
             if parser.root:
                 widget = Factory.get(parser.root.name)()
@@ -1202,7 +1626,7 @@ class BuilderBase(object):
         '''Create a specialized template using a specific context.
         .. versionadded:: 1.0.5
 
-        With template, you can construct custom widget from a kv lang
+        With templates, you can construct custom widgets from a kv lang
         definition by giving them a context. Check :ref:`Template usage
         <template_usage>`.
         '''
@@ -1218,14 +1642,18 @@ class BuilderBase(object):
             rootwidgets = []
             for basecls in baseclasses.split('+'):
                 rootwidgets.append(Factory.get(basecls))
-            cls = ClassType(name, tuple(rootwidgets), {})
+            cls = type(name, tuple(rootwidgets), {})
             Cache.append('kv.lang', key, cls)
         widget = cls()
-        self._apply_rule(widget, rule, rule, template_ctx=ctx)
+        # in previous versions, ``ctx`` is passed as is as ``template_ctx``
+        # preventing widgets in it from be collected by the GC. This was
+        # especially relevant to AccordionItem's title_template.
+        proxy_ctx = {k: get_proxy(v) for k, v in ctx.items()}
+        self._apply_rule(widget, rule, rule, template_ctx=proxy_ctx)
         return widget
 
     def apply(self, widget):
-        '''Search all the rules that match the widget, and apply them.
+        '''Search all the rules that match the widget and apply them.
         '''
         rules = self.match(widget)
         if __debug__:
@@ -1246,7 +1674,7 @@ class BuilderBase(object):
         # will collect reference to all the id in children
         assert(rule not in self.rulectx)
         self.rulectx[rule] = rctx = {
-            'ids': {'root': widget},
+            'ids': {'root': widget.proxy_ref},
             'set': [], 'hdl': []}
 
         # extract the context of the rootrule (not rule!)
@@ -1259,7 +1687,20 @@ class BuilderBase(object):
 
         # if we got an id, put it in the root rule for a later global usage
         if rule.id:
-            rctx['ids'][rule.id] = widget
+            # use only the first word as `id` discard the rest.
+            rule.id = rule.id.split('#', 1)[0].strip()
+            rctx['ids'][rule.id] = widget.proxy_ref
+            # set id name as a attribute for root widget so one can in python
+            # code simply access root_widget.id_name
+            _ids = dict(rctx['ids'])
+            _root = _ids.pop('root')
+            _new_ids = _root.ids
+            for _key in iterkeys(_ids):
+                if _ids[_key] == _root:
+                    # skip on self
+                    continue
+                _new_ids[_key] = _ids[_key]
+            _root.ids = _new_ids
 
         # first, ensure that the widget have all the properties used in
         # the rule if not, they will be created as ObjectProperty.
@@ -1291,23 +1732,25 @@ class BuilderBase(object):
 
             if Factory_is_template(cname):
                 # we got a template, so extract all the properties and
-                # handlers, and push them in a "ctx" dictionnary.
+                # handlers, and push them in a "ctx" dictionary.
                 ctx = {}
                 idmap = copy(global_idmap)
                 idmap.update({'root': rctx['ids']['root']})
                 if 'ctx' in rctx['ids']:
                     idmap.update({'ctx': rctx['ids']['ctx']})
                 try:
-                    for prule in crule.properties.itervalues():
+                    for prule in crule.properties.values():
                         value = prule.co_value
                         if type(value) is CodeType:
-                                value = eval(value, idmap)
+                            value = eval(value, idmap)
                         ctx[prule.name] = value
                     for prule in crule.handlers:
                         value = eval(prule.value, idmap)
                         ctx[prule.name] = value
-                except Exception, e:
-                    raise BuilderException(prule.ctx, prule.line, str(e))
+                except Exception as e:
+                    raise BuilderException(
+                        prule.ctx, prule.line,
+                        '{}: {}'.format(e.__class__.__name__, e))
 
                 # create the template with an explicit ctx
                 child = cls(**ctx)
@@ -1329,9 +1772,10 @@ class BuilderBase(object):
 
         # append the properties and handlers to our final resolution task
         if rule.properties:
-            rctx['set'].append((widget, rule.properties.values()))
+            rctx['set'].append((widget.proxy_ref,
+                                list(rule.properties.values())))
         if rule.handlers:
-            rctx['hdl'].append((widget, rule.handlers))
+            rctx['hdl'].append((widget.proxy_ref, rule.handlers))
 
         # if we are applying another rule that the root one, then it's done for
         # us!
@@ -1340,39 +1784,54 @@ class BuilderBase(object):
             return
 
         # normally, we can apply a list of properties with a proper context
-        for widget_set, rules in reversed(rctx['set']):
-            for rule in rules:
-                assert(isinstance(rule, ParserRuleProperty))
-                key = rule.name
-                value = rule.co_value
-                if type(value) is CodeType:
-                    value = create_handler(widget_set, widget_set, key,
-                                           value, rule, rctx['ids'])
-                setattr(widget_set, key, value)
+        try:
+            rule = None
+            for widget_set, rules in reversed(rctx['set']):
+                for rule in rules:
+                    assert(isinstance(rule, ParserRuleProperty))
+                    key = rule.name
+                    value = rule.co_value
+                    if type(value) is CodeType:
+                        value = create_handler(widget_set, widget_set, key,
+                                               value, rule, rctx['ids'])
+                    setattr(widget_set, key, value)
+        except Exception as e:
+            if rule is not None:
+                raise BuilderException(rule.ctx, rule.line,
+                                       '{}: {}'.format(e.__class__.__name__,
+                                                       e))
+            raise e
 
         # build handlers
-        for widget_set, rules in rctx['hdl']:
-            for crule in rules:
-                assert(isinstance(crule, ParserRuleProperty))
-                assert(crule.name.startswith('on_'))
-                key = crule.name
-                if not widget_set.is_event_type(key):
-                    key = key[3:]
-                idmap = copy(global_idmap)
-                idmap.update(rctx['ids'])
-                idmap['self'] = widget_set
-                widget_set.bind(**{key: partial(custom_callback,
-                                                crule, idmap)})
-
-                #hack for on_parent
-                if crule.name == 'on_parent':
-                    Factory.Widget.parent.dispatch(widget_set)
+        try:
+            crule = None
+            for widget_set, rules in rctx['hdl']:
+                for crule in rules:
+                    assert(isinstance(crule, ParserRuleProperty))
+                    assert(crule.name.startswith('on_'))
+                    key = crule.name
+                    if not widget_set.is_event_type(key):
+                        key = key[3:]
+                    idmap = copy(global_idmap)
+                    idmap.update(rctx['ids'])
+                    idmap['self'] = widget_set.proxy_ref
+                    widget_set.bind(**{key: partial(custom_callback,
+                                                    crule, idmap)})
+                    #hack for on_parent
+                    if crule.name == 'on_parent':
+                        Factory.Widget.parent.dispatch(widget_set.__self__)
+        except Exception as e:
+            if crule is not None:
+                raise BuilderException(
+                    crule.ctx, crule.line,
+                    '{}: {}'.format(e.__class__.__name__, e))
+            raise e
 
         # rule finished, forget it
         del self.rulectx[rootrule]
 
     def match(self, widget):
-        '''Return a list of :class:`ParserRule` matching the widget.
+        '''Return a list of :class:`ParserRule` objects matching the widget.
         '''
         cache = BuilderBase._match_cache
         k = (widget.__class__, widget.id, tuple(widget.cls))
@@ -1381,9 +1840,43 @@ class BuilderBase(object):
         rules = []
         for selector, rule in self.rules:
             if selector.match(widget):
+                if rule.avoid_previous_rules:
+                    del rules[:]
                 rules.append(rule)
         cache[k] = rules
         return rules
+
+    def sync(self):
+        '''Execute all the waiting operations, such as the execution of all the
+        expressions related to the canvas.
+
+        .. versionadded:: 1.7.0
+        '''
+        l = set(_delayed_calls)
+        del _delayed_calls[:]
+        for func in l:
+            try:
+                func(None, None)
+            except ReferenceError:
+                continue
+
+    def unbind_widget(self, uid):
+        '''(internal) Unbind all the handlers created by the rules of the
+        widget. The :attr:`kivy.uix.widget.Widget.uid` is passed here
+        instead of the widget itself, because we are using it in the
+        widget destructor.
+
+        .. versionadded:: 1.7.2
+        '''
+        if uid not in _handlers:
+            return
+        for f, k, fn in _handlers[uid]:
+            try:
+                f.unbind(**{k: fn})
+            except ReferenceError:
+                # proxy widget is already gone, that's cool :)
+                pass
+        del _handlers[uid]
 
     def _build_canvas(self, canvas, widget, rule, rootrule):
         global Instruction
@@ -1401,16 +1894,79 @@ class BuilderBase(object):
                     crule.ctx, crule.line,
                     'You can add only graphics Instruction in canvas.')
             try:
-                for prule in crule.properties.itervalues():
+                for prule in crule.properties.values():
                     key = prule.name
                     value = prule.co_value
                     if type(value) is CodeType:
                         value = create_handler(
-                            widget, instr, key, value, prule, idmap)
+                            widget, instr.proxy_ref,
+                            key, value, prule, idmap, True)
                     setattr(instr, key, value)
-            except Exception, e:
-                raise BuilderException(prule.ctx, prule.line, str(e))
+            except Exception as e:
+                raise BuilderException(
+                    prule.ctx, prule.line,
+                    '{}: {}'.format(e.__class__.__name__, e))
 
 #: Main instance of a :class:`BuilderBase`.
-Builder = BuilderBase()
+Builder = register_context('Builder', BuilderBase)
 Builder.load_file(join(kivy_data_dir, 'style.kv'), rulesonly=True)
+
+if 'KIVY_PROFILE_LANG' in environ:
+    import atexit
+    import cgi
+
+    def match_rule(fn, index, rule):
+        if rule.ctx.filename != fn:
+            return
+        for prop, prp in iteritems(rule.properties):
+            if prp.line != index:
+                continue
+            yield prp
+        for child in rule.children:
+            for r in match_rule(fn, index, child):
+                yield r
+        if rule.canvas_root:
+            for r in match_rule(fn, index, rule.canvas_root):
+                yield r
+        if rule.canvas_before:
+            for r in match_rule(fn, index, rule.canvas_before):
+                yield r
+        if rule.canvas_after:
+            for r in match_rule(fn, index, rule.canvas_after):
+                yield r
+
+    def dump_builder_stats():
+        html = [
+            '<!doctype html>'
+            '<html><body>',
+            '<style type="text/css">\n',
+            'pre { margin: 0; }\n',
+            '</style>']
+        files = set([x[1].ctx.filename for x in Builder.rules])
+        for fn in files:
+            lines = open(fn).readlines()
+            html += ['<h2>', fn, '</h2>', '<table>']
+            count = 0
+            for index, line in enumerate(lines):
+                line = line.rstrip()
+                line = cgi.escape(line)
+                matched_prp = []
+                for psn, rule in Builder.rules:
+                    matched_prp += list(match_rule(fn, index, rule))
+
+                count = sum(set([x.count for x in matched_prp]))
+
+                color = (255, 155, 155) if count else (255, 255, 255)
+                html += ['<tr style="background-color: rgb{}">'.format(color),
+                         '<td>', str(index + 1), '</td>',
+                         '<td>', str(count), '</td>',
+                         '<td><pre>', line, '</pre></td>',
+                         '</tr>']
+            html += ['</table>']
+        html += ['</body></html>']
+        with open('builder_stats.html', 'w') as fd:
+            fd.write(''.join(html))
+
+        print('Profiling written at builder_stats.html')
+
+    atexit.register(dump_builder_stats)

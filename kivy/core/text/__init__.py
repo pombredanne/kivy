@@ -2,15 +2,15 @@
 Text
 ====
 
-Abstraction of text creation. Depending of the selected backend, the text
-rendering can be more or less accurate.
+An abstraction of text creation. Depending of the selected backend, the
+accuracy of text rendering may vary.
 
 .. versionchanged:: 1.5.0
-    :data:`LabelBase.line_height` added.
+    :attr:`LabelBase.line_height` added.
 
 .. versionchanged:: 1.0.7
-    The :class:`LabelBase` don't generate any texture is the text have a width
-    <= 1.
+    The :class:`LabelBase` does not generate any texture if the text has a
+    width <= 1.
 '''
 
 __all__ = ('LabelBase', 'Label')
@@ -21,6 +21,7 @@ from kivy import kivy_data_dir
 from kivy.graphics.texture import Texture
 from kivy.core import core_select_lib
 from kivy.resources import resource_find
+from kivy.compat import PY2
 
 DEFAULT_FONT = 'DroidSans'
 
@@ -32,48 +33,65 @@ FONT_BOLDITALIC = 3
 
 class LabelBase(object):
     '''Core text label.
-    This is the abstract class used for different backend to render text.
+    This is the abstract class used by different backends to render text.
 
     .. warning::
-        The core text label can't be changed at runtime, you must recreate one.
-
-    .. versionadded::
-        In 1.0.7, the valign is now respected. This wasn't the case before. You
-        might have issue in your application if you never think about that
-        before.
-
-    .. versionadded::
-        In 1.0.8, `size` have been deprecated and replaced with `text_size`
+        The core text label can't be changed at runtime. You must recreate one.
 
     :Parameters:
-        `font_size`: int, default to 12
+        `font_size`: int, defaults to 12
             Font size of the text
-        `font_name`: str, default to DEFAULT_FONT
+        `font_name`: str, defaults to DEFAULT_FONT
             Font name of the text
-        `bold`: bool, default to False
+        `bold`: bool, defaults to False
             Activate "bold" text style
-        `italic`: bool, default to False
+        `italic`: bool, defaults to False
             Activate "italic" text style
-        `text_size`: tuple, default to (None, None)
-            Add constraint to render the text (inside a bounding box)
+        `text_size`: tuple, defaults to (None, None)
+            Add constraint to render the text (inside a bounding box).
             If no size is given, the label size will be set to the text size.
-        `padding`: float, default to None
+        `padding`: float, defaults to None
             If it's a float, it will set padding_x and padding_y
-        `padding_x`: float, default to 0.0
+        `padding_x`: float, defaults to 0.0
             Left/right padding
-        `padding_y`: float, default to 0.0
+        `padding_y`: float, defaults to 0.0
             Top/bottom padding
-        `halign`: str, default to "left"
-            Horizontal text alignement inside bounding box
-        `valign`: str, default to "bottom"
-            Vertical text alignement inside bounding box
+        `halign`: str, defaults to "left"
+            Horizontal text alignment inside the bounding box
+        `valign`: str, defaults to "bottom"
+            Vertical text alignment inside the bounding box
         `shorten`: bool, defaults to False
             Indicate whether the label should attempt to shorten its textual
             contents as much as possible if a `size` is given.
-            Setting this to True without an appropriately set size will lead
+            Setting this to True without an appropriately set size will lead to
             unexpected results.
-        `mipmap` : bool, default to False
-            Create mipmap for the texture
+        `max_lines`: int, defaults to 0 (unlimited)
+            If set, this indicate how maximum line are allowed to render the
+            text. Works only if a limitation on text_size is set.
+        `mipmap` : bool, defaults to False
+            Create a mipmap for the texture
+        `strip` : bool, defaults to False
+            Whether each row of text has its leading and trailing spaces
+            stripped. If `halign` is `justify` it is implicitly True.
+
+    .. versionchanged:: 1.8.1
+        `strip` was added.
+
+    .. versionchanged:: 1.8.1
+        `padding_x` and `padding_y` has been fixed to work as expected.
+        In the past, the text was padded by the negative of their values.
+
+    .. versionchanged:: 1.8.0
+        `max_lines` parameters has been added.
+
+    .. versionchanged:: 1.0.8
+        `size` have been deprecated and replaced with `text_size`.
+
+    .. versionchanged:: 1.0.7
+        The `valign` is now respected. This wasn't the case previously
+        so you might have an issue in your application if you have not
+        considered this.
+
     '''
 
     __slots__ = ('options', 'texture', '_label', '_text_size')
@@ -84,15 +102,18 @@ class LabelBase(object):
 
     _fonts_cache = {}
 
+    _texture_1px = None
+
     def __init__(self, text='', font_size=12, font_name=DEFAULT_FONT,
                  bold=False, italic=False, halign='left', valign='bottom',
                  shorten=False, text_size=None, mipmap=False, color=None,
-                 line_height=1.0, **kwargs):
+                 line_height=1.0, strip=False, **kwargs):
 
         options = {'text': text, 'font_size': font_size,
-            'font_name': font_name, 'bold': bold, 'italic': italic,
-            'halign': halign, 'valign': valign, 'shorten': shorten,
-            'mipmap': mipmap, 'line_height': line_height}
+                   'font_name': font_name, 'bold': bold, 'italic': italic,
+                   'halign': halign, 'valign': valign, 'shorten': shorten,
+                   'mipmap': mipmap, 'line_height': line_height,
+                   'strip': strip}
 
         options['color'] = color or (1, 1, 1, 1)
         options['padding'] = kwargs.get('padding', 0)
@@ -107,16 +128,12 @@ class LabelBase(object):
             else:
                 options['text_size'] = text_size
 
-        text_width, text_height = options['text_size']
-        if text_width is not None:
-            self._text_size = (
-                text_width - options['padding_x'] * 2,
-                text_height)
-        else:
-            self._text_size = options['text_size']
-
+        self._text_size = options['text_size']
         self._text = options['text']
-        self._internal_height = 0
+        self._internal_width = self._internal_height = 0
+        self._cached_lines = []
+        self._cached_text_size = self._cached_padding = (0, 0)
+        self._cached_options = {}
 
         self.options = options
         self.texture = None
@@ -124,15 +141,16 @@ class LabelBase(object):
 
     @staticmethod
     def register(name, fn_regular, fn_italic=None, fn_bold=None,
-            fn_bolditalic=None):
+                 fn_bolditalic=None):
         '''Register an alias for a Font.
 
         .. versionadded:: 1.1.0
 
-        If you're using a ttf directly, you might not be able to use bold/italic
-        of the ttf version. If the font is delivered with different version of
-        it (one regular, one italic and one bold), then you need to register it
-        and use the alias instead.
+        If you're using a ttf directly, you might not be able to use the
+        bold/italic properties of
+        the ttf version. If the font is delivered in multiple files
+        (one regular, one italic and one bold), then you need to register these
+        files and use the alias instead.
 
         All the fn_regular/fn_italic/fn_bold parameters are resolved with
         :func:`kivy.resources.resource_find`. If fn_italic/fn_bold are None,
@@ -184,7 +202,8 @@ class LabelBase(object):
             options['font_name_r'] = filename
 
     def get_extents(self, text):
-        '''Return a tuple with (width, height) for a text.'''
+        '''Return a tuple (width, height) indicating the size of the specified
+        text'''
         return (0, 0)
 
     def _render_begin(self):
@@ -198,200 +217,281 @@ class LabelBase(object):
 
     def shorten(self, text, margin=2):
         # Just a tiny shortcut
-        textwidth = lambda txt: self.get_extents(txt)[0]
+        textwidth = self.get_extents
         if self.text_size[0] is None:
             width = 0
         else:
-            width = int(self.text_size[0])
+            width = max(0,
+                        int(self.text_size[0] - self.options['padding_x'] * 2))
 
-        letters = ' ... ' + text
-        while textwidth(letters) > width:
-            letters = letters[: letters.rfind(' ')]
+        letters = '_..._' + text
+        while textwidth(letters)[0] > width:
+            letters = letters[:letters.rfind(' ')]
 
         max_letters = len(letters) - 2
         segment = (max_letters // 2)
 
         if segment - margin > 5:
             segment -= margin
-            return u'{0}...{1}'.format(text[:segment].strip(),
-                text[-segment:].strip())
+            return type(text)('{0}...{1}').format(text[:segment].strip(),
+                                                  text[-segment:].strip())
         else:
             segment = max_letters - 3  # length of '...'
-            return u'{0}...'.format(text[:segment].strip())
+            return type(text)('{0}...').format(text[:segment].strip())
 
-    def render(self, real=False):
-        '''Return a tuple(width, height) to create the image
-        with the user constraints.
-
-        2 differents methods are used:
-          * if user don't set width, splitting line
-            and calculate max width + height
-          * if user set a width, blit per glyph
-        '''
-
-        options = self.options
+    def _render_real(self):
+        options = self._cached_options
         render_text = self._render_text
         get_extents = self.get_extents
-        uw, uh = self.text_size
-        w, h = 0, 0
-        x, y = 0, 0
-        if real:
-            self._render_begin()
-            halign = options['halign']
-            valign = options['valign']
-            if valign == 'bottom':
-                y = self.height - self._internal_height
-            elif valign == 'middle':
-                y = int((self.height - self._internal_height) / 2)
-        else:
-            self._internal_height = 0
+        uw, uh = self._cached_text_size
+        xpad, ypad = self._cached_padding
+        x, y = xpad, ypad   # pos in the texture
+        contentw = self._internal_width - 2 * xpad
+        split = re.split
+        pat = re.compile('( +)')
+        self._render_begin()
 
-        # no width specified, faster method
-        if uw is None:
-            for line in self.text.split('\n'):
-                lw, lh = get_extents(line)
-                lh = lh * options['line_height']
-                if real:
-                    x = 0
-                    if halign == 'center':
-                        x = int((self.width - lw) / 2.)
-                    elif halign == 'right':
-                        x = int(self.width - lw)
-                    if len(line):
-                        render_text(line, x, y)
-                    y += int(lh)
-                else:
-                    w = max(w, int(lw))
-                    self._internal_height += int(lh)
-            h = self._internal_height if uh is None else uh
+        sw = get_extents(' ')[0]
+        halign = options['halign']
+        valign = options['valign']
+        if valign == 'bottom':
+            y = self.height - self._internal_height + ypad
+        elif valign == 'middle':
+            y = int((self.height - self._internal_height) / 2 + ypad)
 
-        # constraint
-        else:
-            # precalculate id/name
-            if not self.fontid in self._cache_glyphs:
-                self._cache_glyphs[self.fontid] = {}
-            cache = self._cache_glyphs[self.fontid]
+        for line, (lw, lh), is_last_line in self._cached_lines:
+            x = xpad
+            if halign[0] == 'c':  # center
+                x = int((self.width - lw) / 2.)
+            elif halign[0] == 'r':  # right
+                x = int(self.width - lw - xpad)
 
-            if not real:
-                # verify that each glyph have size
-                glyphs = list(set(self.text)) + ['.']
-                for glyph in glyphs:
-                    if not glyph in cache:
-                        cache[glyph] = get_extents(glyph)
+            # right left justify
+            # divide left over space between `spaces`
+            # TODO implement a better method of stretching glyphs?
+            if halign[-1] == 'y' and line and not is_last_line:
+                # number spaces needed to fill, and remainder
+                n, rem = divmod(contentw - lw, sw)
+                words = None
+                if n or rem:
+                    # there's no trailing space when justify is selected
+                    words = split(pat, line)
+                if words is not None and len(words) > 1:
+                    space = type(line)(' ')
+                    # words: every even index is spaces, just add ltr n spaces
+                    for i in range(n):
+                        idx = (2 * i + 1) % (len(words) - 1)
+                        words[idx] = words[idx] + space
+                    if rem:
+                        # render the last word at the edge
+                        render_text(words[-1], x + contentw -
+                                    get_extents(words[-1])[0], y)
+                        line = ''.join(words[:-2])
+                    else:
+                        line = ''.join(words)
 
-            # Shorten the text that we actually display
-            text = self.text
-            last_word_width = get_extents(text[text.rstrip().rfind(' '):])[0]
-            if (options['shorten'] and get_extents(text)[0] >
-                uw - last_word_width):
-                text = self.shorten(text)
-
-            # first, split lines
-            glyphs = []
-            lines = []
-            lw = lh = 0
-            for word in re.split(r'( |\n)', text):
-
-                # calculate the word width
-                ww, wh = 0, 0
-                if word == '':
-                    ww, wh = get_extents(' ')
-                for glyph in word:
-                    gw, gh = cache[glyph]
-                    ww += gw
-                    wh = max(gh, wh)
-                wh = wh * options['line_height']
-
-                # is the word fit on the uw ?
-                if ww > uw:
-                    lines.append(((ww, wh), word))
-                    lw = lh = x = 0
-                    continue
-
-                # get the maximum height for this line
-                lh = max(wh, lh)
-                # is the word fit on the line ?
-                if (word == '\n' or x + ww > uw) and lw != 0:
-                    # no, push actuals glyph
-                    lines.append(((lw, lh), glyphs))
-                    glyphs = []
-
-                    # reset size
-                    lw = lh = x = 0
-
-                    # new line ? don't render
-                    if word == '\n' or word == ' ':
-                        continue
-
-                # advance the width
-                lw += ww
-                x += ww
-                lh = max(wh, lh)
-                glyphs += list(word)
-
-            # got some char left ?
-            if lw != 0:
-                lines.append(((lw, lh), glyphs))
-
-            if not real:
-                self._internal_height = sum([size[1] for size, glyphs in lines])
-                ll_h = lines[-1][0][1]
-                lh_offset = ll_h - (ll_h / self.options['line_height'])
-                self._internal_height = self._internal_height - lh_offset
-                h = self._internal_height if uh is None else uh
-                w = uw
-            else:
-                # really render now.
-                for size, glyphs in lines:
-                    x = 0
-                    if halign == 'center':
-                        x = int((self.width - size[0]) / 2.)
-                    elif halign == 'right':
-                        x = int(self.width - size[0])
-                    for glyph in glyphs:
-                        lw, lh = cache[glyph]
-                        if glyph != ' ' and glyph != '\n':
-                            render_text(glyph, x, y)
-                        x += lw
-                    y += size[1]
-
-        if not real:
-            # was only the first pass
-            # return with/height
-            w = int(max(w, 1))
-            h = int(max(h, 1))
-            return w, h
+            if len(line):
+                render_text(line, x, y)
+            y += lh
 
         # get data from provider
         data = self._render_end()
         assert(data)
 
-        # if data width is too tiny, just create texture, don't really render!
-        if data.width <= 1:
-            if self.texture:
-                self.texture = None
-            return
-
-        # create texture is necessary
-        texture = self.texture
-        mipmap = options['mipmap']
-        if texture is None or \
-                self.width != texture.width or \
-                self.height != texture.height:
-            texture = Texture.create_from_data(data, mipmap=mipmap)
-            data = None
-            texture.flip_vertical()
-            texture.add_reload_observer(self._texture_refresh)
-            self.texture = texture
-
-        # update texture
         # If the text is 1px width, usually, the data is black.
         # Don't blit that kind of data, otherwise, you have a little black bar.
         if data is not None and data.width > 1:
-            texture.blit_data(data)
+            self.texture.blit_data(data)
+
+    def render(self, real=False):
+        '''Return a tuple (width, height) to create the image
+        with the user constraints. (width, height) includes the padding.
+        '''
+        if real:
+            return self._render_real()
+
+        self._cached_options = options = dict(self.options)
+        render_text = self._render_text
+        get_extents = self.get_extents
+        uw, uh = self.text_size
+        xpad, ypad = options['padding_x'], options['padding_y']
+        max_lines = int(options.get('max_lines', 0))
+        strip = options['strip'] or options['halign'][-1] == 'y'
+        w, h = 0, 0   # width and height of the texture
+        x, y = xpad, ypad   # pos in the texture
+        # don't allow them to change before rendering for real
+        self._cached_padding = xpad, ypad
+        self._cached_text_size = uw, uh
+        text = self.text
+        if strip:
+            text = text.strip()
+        if not text:
+            self._cached_lines = []
+            return 0, 0
+
+        # no width specified, find max width. For height, if not specified,
+        # do everything, otherwise stop when reached specified height
+        if uw is None:
+            h = ypad * 2
+            lines = text.split('\n')
+            for i in range(len(lines)):
+                if (max_lines > 0 and i + 1 > max_lines or uh is not None
+                    and h > uh):
+                    i -= 1
+                    break
+                line = lines[i].strip() if strip else lines[i]
+                lw, lh = get_extents(line)
+                lh = int(lh * options['line_height'])
+                if uh is not None and h + lh > uh:  # too high
+                    break
+                w = max(w, int(lw + 2 * xpad))
+                h += lh
+                lines[i] = (line, (lw, lh), True)  # True == its line end
+            self._internal_height = h
+            self._cached_lines = lines[:i + 1]
+            if uh is not None:  # texture size must be requested text_size
+                h = uh
+
+        else:  # constraint width
+            uw = max(0, uw - xpad * 2)  # actual w, h allowed for rendering
+            if uh is not None:
+                uh = max(0, uh - ypad * 2)
+            bare_size = get_extents('')
+
+            # Shorten the text that we actually display
+            if (options['shorten'] and get_extents(text)[0] > uw):
+                text = self.shorten(text)
+                lw, lh = get_extents(text)
+                self._cached_lines = [(text, (lw + 2 * xpad, lh + 2 * ypad),
+                                       True)] if text else []
+                self._internal_width = uw + xpad * 2
+                self._internal_height = lh + 2 * ypad
+                # height must always be the requested size, if specified
+                h = self._internal_height if uh is None else lh + 2 * ypad
+                return self._internal_width, h
+
+            lines = []
+            h = 0
+            # split into lines and find how many real lines each line requires
+            for line in text.split('\n'):
+                if (uh is not None and h > uh or max_lines > 0 and
+                    len(lines) > max_lines):
+                    break
+
+                if strip:
+                    line = line.strip()
+                if line == '':  # just add empty line if empty
+                    lines.append(('', bare_size, True))
+                    h += lines[-1][1][1] * options['line_height']
+                    continue
+
+                # what we do is given the current text in this real line
+                # (starts empty), if we can fit another word, add it. Otherwise
+                # add it to a new line. But if a single word doen't fit on a
+                # single line, just split the word itself into multiple lines
+
+                # s is idx in line of start of this actual line, e is idx of
+                # next space, m is idx after s that still fits on this line
+                s = m = e = 0
+                while s != len(line):
+                    # find next space or end, if end don't keep checking
+                    if e != len(line):
+                        e = line.find(' ', m + 1)
+                        if e is -1:
+                            e = len(line)
+
+                    lwe, lhe = get_extents(line[s:e])  # does next word fit?
+                    if lwe > uw:  # too wide
+                        if s != m:
+                            # theres already some text, commit and go next line
+                            # make sure there are no trailing spaces, may occur
+                            # if many spaces is followed by word not fitting
+                            ln = line[s:m]
+                            if strip and ln[-1] == ' ':
+                                ln = ln.rstrip()
+                                lines.append((ln, get_extents(ln), False))
+                            else:
+                                lines.append((line[s:m], (lw, lh), False))
+                            h += lh * options['line_height']
+                            s = m
+
+                        # try to fit word on new line, if it doesn't fit we'll
+                        # have to break the word into as many lines needed
+                        if strip:
+                            s = e - len(line[s:e].lstrip())
+                        if s == e:  # if it was only a stripped space, move on
+                            m = s
+                            continue
+
+                        # now break single word into as many lines needed
+                        m = s
+                        while s != e:
+                            # does remainder fit in single line?
+                            lwe, lhe = get_extents(line[s:e])
+                            if lwe <= uw:
+                                m = e
+                                break
+                            # if not, fit as much as possible into this line
+                            while (m != e and
+                                   get_extents(line[s:m + 1])[0] <= uw):
+                                m += 1
+                            # not enough room for even single char, skip it
+                            if m == s:
+                                s += 1
+                            else:
+                                lines.append((line[s:m],
+                                get_extents(line[s:m]), m == len(line)))
+                                h += lines[-1][1][1] * options['line_height']
+                                s = m
+                            m = s
+                        m = s  # done with long word, go back to normal
+
+                    else:   # the word fits
+                        # don't allow leading spaces on empty lines
+                        if strip and m == s and line[s:e] == ' ':
+                            s = m = e
+                            continue
+                        m = e
+
+                    if m == len(line):  # we're done
+                        if s != len(line):
+                            lines.append((line[s:], (lwe, lhe), True))
+                            h += lhe * options['line_height']
+                        break
+                    lw, lh = lwe, lhe
+
+            # ensure the number of lines is not more than the user asked
+            # above, we might have gone a few lines over
+            if max_lines > 0:
+                lines = lines[:max_lines]
+            # now make sure we don't have lines outside specified height
+            if uh is not None:
+                lh = options['line_height']
+                i = h = 0
+                while i < len(lines) and h + lines[i][1][1] * lh <= uh:
+                    h += lines[i][1][1] * lh
+                    i += 1
+                lines = lines[:i]
+
+            self._internal_height = h + ypad * 2
+            # height must always be the requested size, if specified
+            h = self._internal_height if uh is None else uh + ypad * 2
+            w = uw + xpad * 2
+            self._cached_lines = lines
+
+        # was only the first pass
+        # return with/height
+        w = int(max(w, 1))
+        self._internal_width = w
+        h = int(max(h, 1))
+        return w, h
 
     def _texture_refresh(self, *l):
         self.refresh()
+
+    def _texture_fill(self, texture):
+        # second pass, render for real
+        self.render(real=True)
 
     def refresh(self):
         '''Force re-rendering of the text
@@ -400,19 +500,41 @@ class LabelBase(object):
 
         # first pass, calculating width/height
         sz = self.render()
-        self._size = sz
-        # second pass, render for real
-        self.render(real=True)
-        self._size = sz[0] + self.options['padding_x'] * 2, \
-                     sz[1] + self.options['padding_y'] * 2
+        self._size_texture = sz
+        self._size = (sz[0], sz[1])
+
+        # if no text are rendered, return nothing.
+        width, height = self._size
+        if width <= 1 or height <= 1:
+            self.texture = self.texture_1px
+            return
+
+        # create a delayed texture
+        texture = self.texture
+        if texture is None or \
+                width != texture.width or \
+                height != texture.height:
+            texture = Texture.create(size=(width, height),
+                                     mipmap=self.options['mipmap'],
+                                     callback=self._texture_fill)
+            texture.flip_vertical()
+            texture.add_reload_observer(self._texture_refresh)
+            self.texture = texture
+        else:
+            texture.ask_update(self._texture_fill)
 
     def _get_text(self):
-        try:
-            return self._text.decode('utf8')
-        except AttributeError:
-            # python 3 support
-            return str(self._text)
-        except UnicodeEncodeError:
+        if PY2:
+            try:
+                if type(self._text) is unicode:
+                    return self._text
+                return self._text.decode('utf8')
+            except AttributeError:
+                # python 3 support
+                return str(self._text)
+            except UnicodeDecodeError:
+                return self._text
+        else:
             return self._text
 
     def _set_text(self, text):
@@ -421,6 +543,14 @@ class LabelBase(object):
 
     text = property(_get_text, _set_text, doc='Get/Set the text')
     label = property(_get_text, _set_text, doc='Get/Set the text')
+
+    @property
+    def texture_1px(self):
+        if LabelBase._texture_1px is None:
+            tex = Texture.create(size=(1, 1), colorfmt='rgba')
+            tex.blit_buffer(b'\x00\x00\x00\x00')
+            LabelBase._texture_1px = tex
+        return LabelBase._texture_1px
 
     @property
     def size(self):
@@ -436,17 +566,19 @@ class LabelBase(object):
 
     @property
     def content_width(self):
-        '''Return the content width'''
+        '''Return the content width; i.e. the width of the text without
+        any padding.'''
         if self.texture is None:
             return 0
-        return self.texture.width + 2 * self.options['padding_x']
+        return self.texture.width - 2 * self.options['padding_x']
 
     @property
     def content_height(self):
-        '''Return the content height'''
+        '''Return the content height; i.e. the height of the text without
+        any padding.'''
         if self.texture is None:
             return 0
-        return self.texture.height + 2 * self.options['padding_y']
+        return self.texture.height - 2 * self.options['padding_y']
 
     @property
     def content_size(self):
@@ -457,7 +589,7 @@ class LabelBase(object):
 
     @property
     def fontid(self):
-        '''Return an uniq id for all font parameters'''
+        '''Return a unique id for all font parameters'''
         return str([self.options[x] for x in (
             'font_size', 'font_name_r', 'bold', 'italic')])
 
@@ -468,10 +600,11 @@ class LabelBase(object):
         self._text_size = x
 
     text_size = property(_get_text_size, _set_text_size,
-        doc='''Get/set the (width, height) of the contrained rendering box''')
+                         doc='''Get/set the (width, height) of the '
+                         'contrained rendering box''')
 
     usersize = property(_get_text_size, _set_text_size,
-        doc='''(deprecated) Use text_size instead.''')
+                        doc='''(deprecated) Use text_size instead.''')
 
 # Load the appropriate provider
 Label = core_select_lib('text', (
@@ -480,11 +613,16 @@ Label = core_select_lib('text', (
     ('pil', 'text_pil', 'LabelPIL'),
 ))
 
-# For the first initalization, register the default font
 if 'KIVY_DOC' not in os.environ:
-    Label.register('DroidSans',
-        'data/fonts/DroidSans.ttf',
-        'data/fonts/DroidSans-Italic.ttf',
-        'data/fonts/DroidSans-Bold.ttf',
-        'data/fonts/DroidSans-BoldItalic.ttf')
+    if not Label:
+        from kivy.logger import Logger
+        import sys
+        Logger.critical('App: Unable to get a Text provider, abort.')
+        sys.exit(1)
 
+# For the first initalization, register the default font
+    Label.register('DroidSans',
+                   'data/fonts/DroidSans.ttf',
+                   'data/fonts/DroidSans-Italic.ttf',
+                   'data/fonts/DroidSans-Bold.ttf',
+                   'data/fonts/DroidSans-BoldItalic.ttf')

@@ -28,7 +28,7 @@ class CoreCriticalException(Exception):
     pass
 
 
-def core_select_lib(category, llist, create_instance=False):
+def core_select_lib(category, llist, create_instance=False, base='kivy.core'):
     if 'KIVY_DOC' in os.environ:
         return
     category = category.lower()
@@ -36,53 +36,58 @@ def core_select_lib(category, llist, create_instance=False):
     for option, modulename, classname in llist:
         try:
             # module activated in config ?
-            if option not in kivy.kivy_options[category]:
-                libs_ignored.append(modulename)
-                Logger.debug('{}: Provider <{}> ignored by config'.format(
-                    category.capitalize(), option))
-                continue
+            try:
+                if option not in kivy.kivy_options[category]:
+                    libs_ignored.append(modulename)
+                    Logger.debug(
+                        '{0}: Provider <{1}> ignored by config'.format(
+                            category.capitalize(), option))
+                    continue
+            except KeyError:
+                pass
 
             # import module
-            mod = __import__(name='%s.%s' % (category, modulename),
-                                globals=globals(),
-                                locals=locals(),
-                                fromlist=[modulename], level=-1)
+            mod = __import__(name='{2}.{0}.{1}'.format(
+                category, modulename, base),
+                globals=globals(),
+                locals=locals(),
+                fromlist=[modulename], level=0)
             cls = mod.__getattribute__(classname)
 
             # ok !
-            Logger.info('{}: Provider: {}{}'.format(
+            Logger.info('{0}: Provider: {1}{2}'.format(
                 category.capitalize(), option,
-                '({} ignored)'.format(libs_ignored) if libs_ignored else ''))
+                '({0} ignored)'.format(libs_ignored) if libs_ignored else ''))
             if create_instance:
                 cls = cls()
             return cls
 
         except ImportError as e:
             libs_ignored.append(modulename)
-            Logger.debug('{}: Ignored <{}> (import error)'.format(
+            Logger.debug('{0}: Ignored <{1}> (import error)'.format(
                 category.capitalize(), option))
             Logger.trace('', exc_info=e)
 
         except CoreCriticalException as e:
-            Logger.error('{}: Unable to use {}'.format(
-                    category.capitalize(), option))
+            Logger.error('{0}: Unable to use {1}'.format(
+                category.capitalize(), option))
             Logger.error(
-                    '{}: The module raised an important error: {!r}'.format(
+                '{0}: The module raised an important error: {1!r}'.format(
                     category.capitalize(), e.message))
             raise
 
         except Exception as e:
             libs_ignored.append(modulename)
-            Logger.trace('{}: Unable to use {}'.format(
+            Logger.trace('{0}: Unable to use {1}'.format(
                 category.capitalize(), option, category))
             Logger.trace('', exc_info=e)
 
     Logger.critical(
-        '{}: Unable to find any valuable {} provider at all!'.format(
-        category.capitalize(), category.capitalize()))
+        '{0}: Unable to find any valuable {1} provider at all!'.format(
+            category.capitalize(), category.capitalize()))
 
 
-def core_register_libs(category, libs):
+def core_register_libs(category, libs, base='kivy.core'):
     if 'KIVY_DOC' in os.environ:
         return
     category = category.lower()
@@ -92,28 +97,29 @@ def core_register_libs(category, libs):
         try:
             # module activated in config ?
             if option not in kivy.kivy_options[category]:
-                Logger.debug('{}: option <{}> ignored by config'.format(
+                Logger.debug('{0}: option <{1}> ignored by config'.format(
                     category.capitalize(), option))
                 libs_ignored.append(lib)
                 continue
 
             # import module
-            __import__(name='%s.%s' % (category, lib),
-                        globals=globals(),
-                        locals=locals(),
-                        fromlist=[lib],
-                        level=-1)
+            __import__(name='{2}.{0}.{1}'.format(category, lib, base),
+                       globals=globals(),
+                       locals=locals(),
+                       fromlist=[lib],
+                       level=0)
 
             libs_loaded.append(lib)
 
         except Exception as e:
-            Logger.trace('{}: Unable to use <{}> as loader!'.format(
+            Logger.trace('{0}: Unable to use <{1}> as loader!'.format(
                 category.capitalize(), option))
             Logger.trace('', exc_info=e)
             libs_ignored.append(lib)
 
-    Logger.info('{}: Providers: {} {}'.format(
+    Logger.info('{0}: Providers: {1} {2}'.format(
         category.capitalize(),
         ', '.join(libs_loaded),
-        '({} ignored)'.format(', '.join(libs_ignored)) if libs_ignored else ''))
-
+        '({0} ignored)'.format(
+            ', '.join(libs_ignored)) if libs_ignored else ''))
+    return libs_loaded

@@ -14,10 +14,12 @@ cdef class Context:
     cdef list l_shader
     cdef list l_fbo
 
-    cdef list lr_texture
+    cdef object lr_texture
     cdef list lr_canvas
-    cdef list lr_vbo
-    cdef list lr_fbo
+    cdef object lr_vbo
+    cdef object lr_fbo_rb
+    cdef object lr_fbo_fb
+    cdef object lr_shadersource
 
     cdef void register_texture(self, Texture texture)
     cdef void register_canvas(self, Canvas canvas)
@@ -30,6 +32,7 @@ cdef class Context:
     cdef void dealloc_vbo(self, VBO vbo)
     cdef void dealloc_vertexbatch(self, VertexBatch vbo)
     cdef void dealloc_shader(self, Shader shader)
+    cdef void dealloc_shader_source(self, int shader)
     cdef void dealloc_fbo(self, Fbo fbo)
 
     cdef object trigger_gl_dealloc

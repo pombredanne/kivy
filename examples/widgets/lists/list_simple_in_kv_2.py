@@ -19,7 +19,7 @@ Builder.load_string("""
         size_hint: .8,.8
         adapter:
             sla.SimpleListAdapter(
-            data=["Item #{0}".format(i) for i in xrange(100)],
+            data=["Item #{0}".format(i) for i in range(100)],
             cls=label.Label)
 """)
 
@@ -36,7 +36,6 @@ class MainView(GridLayout):
 
     def __init__(self, **kwargs):
         kwargs['cols'] = 1
-        kwargs['size_hint'] = (1.0, 1.0)
         super(MainView, self).__init__(**kwargs)
 
         listview_modal = ListViewModal()

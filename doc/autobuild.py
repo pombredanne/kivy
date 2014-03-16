@@ -25,6 +25,7 @@ import kivy
 import kivy.app
 import kivy.metrics
 import kivy.atlas
+import kivy.context
 import kivy.core.audio
 import kivy.core.camera
 import kivy.core.clipboard
@@ -36,6 +37,7 @@ import kivy.core.text.markup
 import kivy.core.video
 import kivy.core.window
 import kivy.ext
+import kivy.geometry
 import kivy.graphics
 import kivy.graphics.shader
 import kivy.animation
@@ -45,14 +47,20 @@ import kivy.modules.touchring
 import kivy.modules.inspector
 import kivy.modules.recorder
 import kivy.modules.screen
+import kivy.storage
+import kivy.storage.dictstore
+import kivy.storage.jsonstore
+import kivy.storage.redisstore
 import kivy.network.urlrequest
+import kivy.modules.webdebugger
 import kivy.support
 import kivy.input.recorder
 import kivy.interactive
+import kivy.garden
 from kivy.factory import Factory
 
 # force loading of all classes from factory
-for x in Factory.classes.keys()[:]:
+for x in list(Factory.classes.keys())[:]:
     getattr(Factory, x)
 
 
@@ -61,11 +69,12 @@ base_dir = os.path.dirname(__file__)
 dest_dir = os.path.join(base_dir, 'sources')
 examples_framework_dir = os.path.join(base_dir, '..', 'examples', 'framework')
 
+
 def writefile(filename, data):
     global dest_dir
     # avoid to rewrite the file if the content didn't change
     f = os.path.join(dest_dir, filename)
-    print 'write', filename
+    print('write', filename)
     if os.path.exists(f):
         with open(f) as fd:
             if fd.read() == data:
@@ -81,15 +90,22 @@ for k in kivy.kivy_modules.list().keys():
     kivy.kivy_modules.import_module(k)
 '''
 
+
 # Search all kivy module
-l = [(x, sys.modules[x], os.path.basename(sys.modules[x].__file__).rsplit('.', 1)[0]) for x in sys.modules if x.startswith('kivy') and sys.modules[x]]
+l = [(x, sys.modules[x],
+      os.path.basename(sys.modules[x].__file__).rsplit('.', 1)[0])
+      for x in sys.modules if x.startswith('kivy') and sys.modules[x]]
+
 
 # Extract packages from modules
 packages = []
 modules = {}
+api_modules = []
 for name, module, filename in l:
     if name in ignore_list:
         continue
+    if not any([name.startswith(x) for x in ignore_list]):
+        api_modules.append(name)
     if filename == '__init__':
         packages.append(name)
     else:
@@ -101,28 +117,29 @@ for name, module, filename in l:
 packages.sort()
 
 # Create index
-api_index = \
-'''API Reference
+api_index = '''API Reference
 -------------
 
 The API reference is a lexicographic list of all the different classes,
 methods and features that Kivy offers.
 
 .. toctree::
-    :maxdepth: 2
+    :maxdepth: 1
 
 '''
-for package in [x for x in packages if len(x.split('.')) <= 2]:
+api_modules.sort()
+for package in api_modules:
     api_index += "    api-%s.rst\n" % package
 
 writefile('api-index.rst', api_index)
 
-# Create index for all packages
-template = \
-'''==========================================================================================================
-$SUMMARY
-==========================================================================================================
 
+# Create index for all packages
+template = '\n'.join((
+    '=' * 100,
+    '$SUMMARY',
+    '=' * 100,
+    '''
 $EXAMPLES_REF
 
 .. automodule:: $PACKAGE
@@ -132,10 +149,10 @@ $EXAMPLES_REF
 .. toctree::
 
 $EXAMPLES
-'''
+'''))
 
-template_examples = \
-'''.. _example-reference%d:
+
+template_examples = '''.. _example-reference%d:
 
 Examples
 --------
@@ -143,8 +160,9 @@ Examples
 %s
 '''
 
-template_examples_ref = \
-'''# :ref:`Jump directly to Examples <example-reference%d>`'''
+template_examples_ref = ('# :ref:`Jump directly to Examples'
+                         ' <example-reference%d>`')
+
 
 def extract_summary_line(doc):
     if doc is None:
@@ -176,7 +194,7 @@ for package in packages:
         t += "    api-%s.rst\n" % subpackage
 
     # search modules
-    m = modules.keys()
+    m = list(modules.keys())
     m.sort(key=lambda x: extract_summary_line(sys.modules[x].__doc__))
     for module in m:
         packagemodule = module.rsplit('.', 1)[0]
@@ -188,7 +206,7 @@ for package in packages:
 
 
 # Create index for all module
-m = modules.keys()
+m = list(modules.keys())
 m.sort()
 refid = 0
 for module in m:
@@ -204,7 +222,8 @@ for module in m:
     example_prefix = example_prefix.replace('.', '_')
 
     # try to found any example in framework directory
-    list_examples = glob('%s*.py' % os.path.join(examples_framework_dir, example_prefix))
+    list_examples = glob('%s*.py' % os.path.join(
+        examples_framework_dir, example_prefix))
     for x in list_examples:
         # extract filename without directory
         xb = os.path.basename(x)
@@ -223,7 +242,8 @@ for module in m:
     t = t.replace('$PACKAGE', module)
     if len(example_output):
         refid += 1
-        example_output = template_examples % (refid, '\n\n\n'.join(example_output))
+        example_output = template_examples % (
+                refid, '\n\n\n'.join(example_output))
         t = t.replace('$EXAMPLES_REF', template_examples_ref % refid)
         t = t.replace('$EXAMPLES', example_output)
     else:
@@ -233,4 +253,4 @@ for module in m:
 
 
 # Generation finished
-print 'Generation finished, do make html'
+print('Generation finished, do make html')
