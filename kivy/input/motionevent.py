@@ -40,6 +40,8 @@ MotionEvent from the :class:`~kivy.core.window.Window` to your own callback::
 
     Window.bind(on_motion=on_motion)
 
+You can also listen to changes of the mouse position by watching
+:attr:`~kivy.core.window.WindowBase.mouse_pos`.
 
 Profiles
 --------
@@ -320,7 +322,11 @@ class MotionEvent(MotionEventBase):
             raise Exception('Grab works only for Touch MotionEvents.')
         if self.grab_exclusive_class is not None:
             raise Exception('Cannot grab the touch, touch is exclusive')
-        class_instance = weakref.ref(class_instance)
+        try:
+            class_instance = weakref.ref(class_instance)
+        except TypeError:
+            # handle weakproxy objects which cannot be weakref'd
+            class_instance = weakref.ref(class_instance.__self__)
         if exclusive:
             self.grab_exclusive_class = class_instance
         self.grab_list.append(class_instance)
@@ -346,7 +352,8 @@ class MotionEvent(MotionEventBase):
         self.time_update = time()
         self.depack(args)
 
-    def scale_for_screen(self, w, h, p=None, rotation=0):
+    def scale_for_screen(self, w, h, p=None, rotation=0,
+                         smode='None', kheight=0):
         '''Scale position for the screen
         '''
         sx, sy = self.sx, self.sy
@@ -368,6 +375,14 @@ class MotionEvent(MotionEventBase):
 
         if p:
             self.z = self.sz * float(p)
+
+        if smode:
+            if smode == 'pan':
+                self.y -= kheight
+            elif smode == 'scale':
+                self.y += (kheight * (
+                    (self.y - kheight) / (h - kheight))) - kheight
+
         if self.ox is None:
             self.px = self.ox = self.x
             self.py = self.oy = self.y

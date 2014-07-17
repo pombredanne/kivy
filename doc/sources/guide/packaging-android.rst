@@ -7,9 +7,10 @@ Create a package for Android
 You can create a package for android using the `python-for-android
 <https://github.com/kivy/python-for-android>`_ project. This page explains how to
 download and use it directly on your own machine (see
-:ref:`Packaging your application into APK`), use the prebuilt :ref:`testdrive` virtual
-machine image, or use the :ref:`buildozer` tool to automate the entire
-process. You can also see :ref:`Packaging your application for Kivy Launcher` to run kivy
+:ref:`Packaging your application into APK`), use the prebuilt
+:ref:`Kivy Android VM <kivy_android_vm>` image, or
+use the :ref:`buildozer` tool to automate the entire process. You can also see
+:ref:`Packaging your application for Kivy Launcher` to run kivy
 programs without compiling them.
 
 .. _Packaging your application into APK:
@@ -21,7 +22,7 @@ This section describes how to download and use python-for-android directly.
 
 You'll need:
 
-- A linux computer or virtual machine
+- A linux computer or a :ref:`virtual machine <kivy_android_vm>`
 - Java
 - Python 2.7 (not 2.6.)
 - Jinja2 (python module)
@@ -132,14 +133,6 @@ http://developer.android.com/guide/publishing/app-signing.html
 The release binary will be generated in
 bin/KivyTouchtracer-1.1.0-release-unsigned.apk (for the previous touchtracer example.)
 
-.. _testdrive:
-
-TestDrive
----------
-
-We provide a VirtualBox Image with python-for-android along with
-the Android SDK and NDK preinstalled to ease your installation woes. You can
-download it from `here <http://kivy.org/#download>`_.
 
 Once the VM is loaded, you can follow the instructions from
 :ref:`Packaging your application into APK`. You don't need to download
@@ -212,3 +205,18 @@ The file `android.txt` must contain::
     author=<Your Name>
     orientation=<portrait|landscape>
 
+.. _targetting_android:
+
+Targeting Android
+------------------
+
+Kivy is designed to operate identically across platforms and as a result, makes
+some clear design decisions. It includes its own set of widgets and by default,
+builds an APK with all the required core dependencies and libraries.
+
+If you do not intend to support other operating systems, there are a few
+projects that can help you access native Android functionality and even decrease
+your APK size. Please refer to the "Mobiles" section of our
+`Kivy Wiki <https://github.com/kivy/kivy/wiki>`_ for more information.
+
+    

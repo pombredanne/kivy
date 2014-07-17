@@ -19,6 +19,7 @@ from kivy.logger import Logger
 from kivy.base import stopTouchApp, EventLoop
 from kivy.utils import platform
 from kivy.resources import resource_find
+from kivy.clock import Clock
 
 try:
     android = None
@@ -242,7 +243,8 @@ class WindowPygame(WindowBase):
         if filename is None:
             return None
         if glReadPixels is None:
-            from kivy.core.gl import glReadPixels, GL_RGBA, GL_UNSIGNED_BYTE
+            from kivy.graphics.opengl import (glReadPixels, GL_RGBA,
+                                              GL_UNSIGNED_BYTE)
         width, height = self.system_size
         data = glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE)
         data = str(buffer(data))
@@ -269,6 +271,8 @@ class WindowPygame(WindowBase):
 
             # kill application (SIG_TERM)
             if event.type == pygame.QUIT:
+                if self.dispatch('on_request_close'):
+                    continue
                 EventLoop.quit = True
                 self.close()
 

@@ -17,7 +17,7 @@ You should not use the Sound class directly. The class returned by
 type, so it might return different Sound classes depending the file type.
 
 .. versionchanged:: 1.8.0
-    There is now 2 distinct Gstreamer implementation: one using Gi/Gst working
+    There are now 2 distinct Gstreamer implementations: one using Gi/Gst working
     for both Python 2+3 with Gstreamer 1.0, and one using PyGST working
     only for Python 2 + Gstreamer 0.10.
     If you have issue with GStreamer, have a look at
@@ -25,7 +25,9 @@ type, so it might return different Sound classes depending the file type.
 
 .. note::
 
-    Recording audio is not supported.
+    The core audio library does not support recording audio. If you require
+    this functionality, please refer to the 
+    `audiostream <https://github.com/kivy/audiostream>`_ extension.
 
 '''
 
@@ -199,6 +201,7 @@ except ImportError:
     #audio_libs += [('gi', 'audio_gi')]
     if PY2:
         audio_libs += [('pygst', 'audio_pygst')]
+audio_libs += [('ffpyplayer', 'audio_ffpyplayer')]
 audio_libs += [('sdl', 'audio_sdl')]
 audio_libs += [('pygame', 'audio_pygame')]
 

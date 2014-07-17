@@ -474,18 +474,17 @@ class App(EventDispatcher):
         #: Options passed to the __init__ of the App
         self.options = kwargs
 
-        #: Instance to the :class:`~kivy.config.ConfigParser` of the
-        #: application
-        #: configuration. Can be used to query some config token in the
-        #: build()
+        #: Returns an instance of the :class:`~kivy.config.ConfigParser` for
+        #: the application configuration. You can use this to query some config
+        #: tokens in the :meth:`build` method.
         self.config = None
 
-        #: Root widget set by the :meth:`build` method or by the
+        #: The *root* widget returned by the :meth:`build` method or by the
         #: :meth:`load_kv` method if the kv file contains a root widget.
         self.root = None
 
     def build(self):
-        '''Initializes the application; will be called only once.
+        '''Initializes the application; it will be called only once.
         If this method returns a widget (tree), it will be used as the root
         widget and added to the window.
 
@@ -657,6 +656,14 @@ class App(EventDispatcher):
         return expanduser(defaultpath) % {
             'appname': self.name, 'appdir': self.directory}
 
+    @property
+    def root_window(self):
+        '''.. versionadded:: 1.8.1
+
+        Returns the root window instance used by :meth:`run`.
+        '''
+        return self._app_window
+
     def load_config(self):
         '''(internal) This function is used for returning a ConfigParser with
         the application configuration. It's doing 3 things:
@@ -669,7 +676,13 @@ class App(EventDispatcher):
 
         :return: ConfigParser instance
         '''
-        self.config = config = ConfigParser()
+        try:
+            config = ConfigParser.get_configparser('app')
+        except KeyError:
+            config = None
+        if config is None:
+            config = ConfigParser(name='app')
+        self.config = config
         self.build_config(config)
         # if no sections are created, that's mean the user don't have
         # configuration.
@@ -686,7 +699,14 @@ class App(EventDispatcher):
                 config.read(filename)
             except:
                 Logger.error('App: Corrupted config file, ignored.')
-                self.config = config = ConfigParser()
+                config.name = ''
+                try:
+                    config = ConfigParser.get_configparser('app')
+                except KeyError:
+                    config = None
+                if config is None:
+                    config = ConfigParser(name='app')
+                self.config = config
                 self.build_config(config)
                 pass
         else:
@@ -722,10 +742,11 @@ class App(EventDispatcher):
 
         Different platforms have different conventions with regards to where
         the user can store data such as preferences, saved games and settings.
-        This function implements these conventions.
+        This function implements these conventions. The <app_name> directory
+        is created when the property is called, unless it already exists.
 
         On iOS, `~/Documents<app_name>` is returned (which is inside the
-        apps sandbox).
+        app's sandbox).
 
         On Android, `/sdcard/<app_name>` is returned.
 
